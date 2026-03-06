@@ -1,0 +1,13 @@
+---
+title: "Paternity Table Sources"
+subtitle: "Bibliography of studies included in Rosenbaum, Grebe, & Silk (2026)"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+bibliography: paternity-table-sources.bib
+csl: https://raw.githubusercontent.com/citation-style-language/styles/master/apa.csl
+nocite: '@*'
+---
+
+# References

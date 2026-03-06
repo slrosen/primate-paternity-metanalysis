@@ -1,0 +1,2246 @@
+---
+title: "Distribution of genetic paternity among male primates"
+author: "Stacy Rosenbaum, Nicholas Grebe, Joan B. Silk"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+bibliography: references.bib
+nocite: |
+  @Nievergeltetal2002
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = file.path(dirname(input), "..", "output"),
+      ...
+    )
+  })
+---
+
+# Abstract
+
+<!--Reminder to figure out the logistics of calculating the numbers in the abstract up front so that they can be fully automated-->
+
+Understanding the distribution of paternity within social groups is critical for testing hypotheses about the evolution of behavior and morphology in primates, but assembling the requisite comparative data is a challenging task. We compiled genetic paternity data from 52 species of wild nonhuman primates along with information about ecological, morphological, and social traits that are potentially relevant to understanding what proportion of offspring are sired by "primary males" (i.e., alpha males in multi-male groups and resident males in single male groups). Our data, which currently contains information about 11 primate Families and >3,000 individual paternities, is presented as a publicly accessible, living database designed to be updated as new data become available. Using Bayesian phylogenetic Beta regression and binomial models, we answered questions about the role that phylogeny, group composition, and seasonality play in determining primary males' paternity share, as well as determined the relative share of paternities obtained by non-primary residents versus extra-group males. First, we found that phylogeny has a detectable but relatively modest influence on primary males' paternity share. Species-level differences explained roughly 35–40% of variation in primary males' paternity share, and of that interspecific variation, ~50-70% was attributable to shared phylogenetic history. Second, group composition strongly predicted paternity outcomes. Primary males in single-male/multi-female groups obtained the highest share of paternity, while those in multi-male groups had the lowest, though there was substantial variation within each category. Pair-living animals showed a striking split: males in cohesive pairs sired ~90% of offspring, while those in dispersed pairs sired only ~55%. Contrary to theoretical expectations, reproductive seasonality did not predict primary males' paternity share in any group type. Finally, when primary males in multi-male groups lost paternities, ~75% of losses were to other resident males. Overall, ~5-15% of offspring were sired by extra-group males. Our results largely confirm earlier findings based on smaller data sets, but also that the relationship between social organization and paternity is more complicated than simple categorical predictions suggest. We discuss the gap between the data that would ideally be available for testing these hypotheses versus what currently exists, with hopes that our living database can help close this gap over time.
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, cache=FALSE)
+library(dplyr)
+library(readxl)
+library(gt)
+library(brms)
+library(tidybayes)
+library(tidyr)
+library(ggplot2)
+library(ape)
+library(phytools)
+library(ggtree)
+library(patchwork)
+library(posterior)
+library(stringr)
+
+# Clean and merge the raw Excel data (replaces the former Stata pipeline)
+source("clean_and_merge_data.R")
+
+# Auto-numbering counters for tables and figures
+table_count <- 0
+table_num <- function() {
+  table_count <<- table_count + 1
+  return(table_count)
+}
+
+fig_count <- 0
+fig_num <- function() {
+  fig_count <<- fig_count + 1
+  return(fig_count)
+}
+
+# Pre-compute table numbers for cross-referencing in body text
+# Make sure that these match the order in which table_num() is called when tables are created
+tbl_studyid_num <- table_count + 1       
+tbl_context_num <- table_count + 2       
+tbl_taxonomy_num <- table_count + 3      
+tbl_paternity_num <- table_count + 4     
+tbl_traits_num <- table_count + 5        
+tbl_exclusion_num <- table_count + 6     
+tbl_grptype_num <- table_count + 7       
+
+# Insert figure captions so they can be referenced in chunk headers
+fig_studies <- fig_count + 1
+fig_studies_num <- fig_num()  # increment counter here, but define caption text later (needs data)
+
+fig_simulation <- fig_count + 1
+fig_simulation_cap <- paste0("Figure ", fig_num(), ". Expected change in the proportion of paternities obtained by primary males as a function of number of competitors and fertile female:male ratio. E.g., a 5:1 ratio (the blue line) would represent a situation where a large number of females were fertile at the same time, and thus monopolizability is low\u2013for example, in a seasonally breeding monkey species. A 1:5 ratio (represented by the purple line) would represent a situation where individual females only occasionally come into estrus (e.g., a chimpanzee group that contains many males but likely only one or at most two fertile females at any given point in time), and so monopolizability is high.")
+
+fig_tree <- fig_count + 1  
+fig_tree_num <- fig_num()  # increment counter here, but define caption text later (needs data)
+
+fig_patloss <- fig_count + 1
+fig_patloss_cap <- paste0("Figure ", fig_num(), ". Males in multi-male (MM) groups had the lowest share of paternity in the raw data (the small circles) and in model-derived predicted effects (black bars). The credible interval for the multi-male to single-male/multi-female (MFF) comparison did not include zero. Therefore, we can be confident that primary males in single-male/multi-female groups obtain more paternities than males in multi-male groups. The credible intervals for the other two comparisons (i.e., multi-male to pair-living (MF), and pair-living to single-male/multi-female) included zero. The raw data mean for pair-living species where pairs are cohesive is represented by a green diamond, while the mean for pair-living species where pairs are dispersed is represented by an orange diamond. The n=2 observations where multi-male groups contained multiple males and only a single female are represented in blue. ")
+
+fig_seasonality <- fig_count + 1
+fig_seasonality_cap <- paste0("Figure ", fig_num(), ". Seasonality had little effect on primary male paternity share. In both multi-male and single-male groups, species that were least seasonal, moderately seasonal, and most seasonal had similar estimated primary male paternity proportions, with extensive overlap in credible intervals. The results were qualitatively very similar when pair-living species were excluded from the single-male category. ")
+
+```
+
+```{r caption-style, echo=FALSE, results='asis'}
+if (knitr::is_html_output()) {
+  cat('<style>\n  .figure-caption, .caption { font-size: 0.8em; }\n</style>\n')
+}
+```
+
+```{r load-prepare-data, echo=FALSE, results='hide'}
+
+paternity_table <- read.csv("../data/paternity-table/paternity_table_merged.csv") %>%
+  mutate(
+    proportion_egp_minimum = n_egp / n_paternities,
+    proportion_primary_minimum = n_alphaprimary / n_paternities
+  ) %>%
+  rowwise() %>%
+  mutate(
+    n_egp_maximum = sum(n_egp, n_egp_ambiguous, na.rm = TRUE), #counts NAs as 0s
+    n_primary_maximum = case_when(
+      !is.na(n_alphaprimary) ~ sum(n_alphaprimary, n_residents_unknownrank, na.rm = TRUE),
+      TRUE ~ NA),  # NAs for alpha always return NAs
+    proportion_primary_maximum = n_primary_maximum / n_paternities,
+    proportion_egp_maximum = n_egp_maximum / n_paternities
+  ) %>%
+  ungroup() %>%
+  mutate(
+    grp_composition = as.factor(grp_composition),
+    phylo = as.factor(genus_species_subspecies),
+    spp = as.factor(genus_species_subspecies)
+  ) %>%
+  filter(!is.na(js_or_sr)) # getting rid of T. leucocephalus (no longer in data as of April 2024)
+
+write.csv(paternity_table, "../data/paternity-table/paternity_table.csv")
+
+data <- read.csv("../data/paternity-table/paternity_table.csv")
+phylo_matrix <- as.matrix(read.csv("../data/phylogeny/phylo_matrix.csv", row.names = 1))
+phylo_tree <- read.nexus("../data/phylogeny/consensusTree_10kTrees_Primates_Version3.nex")
+
+
+# Make adjusted versions of the minimum and maximum variables to accommodate Beta regression
+data <- data %>%
+  mutate(
+    proportion_primary_minimum_adj = case_when(
+      proportion_primary_minimum == 0 ~ 0.001,
+      proportion_primary_minimum == 1 ~ 0.999,
+      TRUE ~ proportion_primary_minimum
+    ),
+    proportion_primary_maximum_adj = case_when(
+      proportion_primary_maximum == 0 ~ 0.001,
+      proportion_primary_maximum == 1 ~ 0.999,
+      TRUE ~ proportion_primary_maximum
+    ),
+    proportion_egp_minimum_adj = case_when(
+      proportion_egp_minimum == 0 ~ 0.001,
+      proportion_egp_minimum == 1 ~ 0.999,
+      TRUE ~ proportion_egp_minimum
+    ),
+    proportion_egp_maximum_adj = case_when(
+      proportion_egp_maximum == 0 ~ 0.001,
+      proportion_egp_maximum == 1 ~ 0.999,
+      TRUE ~ proportion_egp_maximum
+  )
+)
+
+# Make the species variable into a factor so it is usable as a random effect
+data$genus_species_subspecies <- as.factor(data$genus_species_subspecies)
+
+# Create a duplicate version of the species variable so it can be used alongside phylo matrix
+data$species_nonphylo <- data$genus_species_subspecies
+
+# Define fig_studies_cap here (rather than in setup) because it needs data-derived values
+min_year <- min(paternity_table$publicationyear, na.rm = TRUE)
+max_year <- max(paternity_table$publicationyear, na.rm = TRUE)
+fig_studies_cap <- paste0("<span style='font-size: 85%;'>Figure ", fig_studies_num, ". Grey bars represent the number of studies published each year between ", min_year, " and ", max_year, " that incorporate paternity data from wild non-human primates. The orange line tracks the cumulative number of studies over time, while the blue line tracks the cumulative number of species represented across those studies. Data in our table that are classified as personal communication/unpub data are not included in this figure. Only one species, <i>Papio anubis</i>, was represented in unpublished data but not published data.")
+
+```
+
+# Introduction
+
+Understanding the distribution of paternity within social groups or populations is critical for testing a wide variety of hypotheses about the evolutionary origins of behavior and morphology. For example, incomplete control models of male reproductive skew predict that the extent of reproductive skew within groups will decrease as the extent of reproductive synchrony among females increases and the number of males in the group grows [@Ostneretal2008]. The degree of sexual dimorphism that occurs in a given species is believed to be a product of the degree of male reproductive skew; in species where skew is high, sexual dimorphism in body size is greater and males are more likely to have ‘weaponry’ useful for fighting for access to females [@Andersson1994]. In species that typically live in pairs, male care and the strength of pair bonds are expected to be inversely related to rates of extra-pair paternity [@Hucketal2014]. And, the evolution of cooperative breeding in mammals is expected to be linked to high rates of maternal and paternal relatedness within groups [@LukasClutton-Brock2012].
+
+Tests of such hypotheses rely on comparative data, which requires reliable, accessible, comprehensive, and representative information about paternity and phenotypic traits of interest. The advent of DNA fingerprinting in the 1980s made it possible to assess paternity. The subsequent development of efficient methods for extracting DNA from fecal samples made it feasible for field researchers to obtain genetic samples from individual animals in wild populations without capturing or handling them. This, in turn, made it possible to assess paternity in wild primate populations. Consequently, the number of studies providing paternity data from wild primates has steadily increased over time (Figure `r fig_studies`). Primates are especially useful for understanding the drivers of paternity distribution. They are the second-largest mammalian Order and have extensive diversity in social organization and mating systems. Theory predicts that both of these play important roles in determining paternity distribution, and thus they are a particularly suitable taxonomic group in which to explore this topic. 
+
+```{r fig-paternity-studies, echo=FALSE, out.width="80%", fig.cap=fig_studies_cap}
+
+#This figure shows the accumulation of primate paternity data over time
+
+# 1. Summarize data by year
+
+# What is the first year each species appears?
+first_appearances <- paternity_table %>%
+  filter(!is.na(publicationyear)) %>%
+  group_by(species_10ktrees) %>% #use this var so it doesn't count subspecies as separate species
+  summarise(first_year = min(publicationyear), .groups = "drop") %>%
+  count(first_year, name = "n_new_species")
+
+# Summarize number of studies per year
+temporal_trends <- paternity_table %>%
+  filter(!is.na(publicationyear)) %>%
+  group_by(publicationyear) %>%
+  summarise(n_studies = n_distinct(reference), .groups = "drop") %>%
+  arrange(publicationyear) %>%
+  # Add species appearances and fill missing years
+  left_join(first_appearances, by = c("publicationyear" = "first_year")) %>%
+  replace_na(list(n_new_species = 0)) %>%
+  # Calculate cumulative totals
+  mutate(
+    cumulative_studies = cumsum(n_studies),
+    cumulative_species = cumsum(n_new_species)
+  )
+
+# Reality check
+#tail(temporal_trends, 1)
+
+
+# 2. Plotting
+
+temptrends_plot <- ggplot(temporal_trends, aes(x = publicationyear)) +
+
+  # Histogram of new studies (left y-axis)
+  geom_bar(aes(y = n_studies), stat = "identity", fill = "grey90") +
+
+  # Cumulative published studies (orange line, right y-axis)
+  geom_line(aes(y = cumulative_studies / 10, color = "Cumulative published studies"), size = 1) +
+  geom_point(aes(y = cumulative_studies / 10, color = "Cumulative published studies"), size = 2) +
+
+  # Cumulative species (blue line, right y-axis)
+  geom_line(aes(y = cumulative_species / 10, color = "Cumulative species represented"), size = 1) +
+  geom_point(aes(y = cumulative_species / 10, color = "Cumulative species represented"), size = 2) +
+
+  # Color mapping
+  scale_color_manual(
+    name = "",
+    values = c("Cumulative published studies" = "darkorange",
+               "Cumulative species represented" = "darkblue")
+  ) +
+
+  # Dual y-axes
+  scale_y_continuous(
+    name = "New studies per year",
+    limits = c(0, 10),
+    breaks = c(2, 4, 6, 8, 10),
+    sec.axis = sec_axis(~ . * 10, name = "Cumulative count")
+  ) +
+
+  # Labels
+  labs(
+    x = "Year",
+    title = "Number of studies incorporating\n paternity data from wild primates over time"
+  ) +
+
+  # Theme and text styling
+  theme_classic() +
+  theme(
+    axis.title.y.right = element_text(color = "black", size = 16),
+    axis.text.y.right  = element_text(color = "black", size = 14),
+    axis.title.y.left  = element_text(size = 16),
+    axis.title.x       = element_text(size = 16),
+    axis.text          = element_text(size = 14),
+    plot.title         = element_text(hjust = 0.5, size = 16),
+    legend.position    = c(0.25, 0.85),
+    legend.background  = element_blank(),
+    legend.text        = element_text(size = 12),
+    legend.key.size    = unit(0.6, "cm")
+  )
+
+print(temptrends_plot)
+
+cumulative_species_fulltab <- length(unique(paternity_table$species_10ktrees)) # For inline text
+
+```
+
+
+Researchers have compiled and analyzed information about paternity distribution in reviews and comparative analyses before [e.g., @BakerShackelford2018; @GogartenKoenig2013; @IsvaranClutton-Brock2007; @Ostneretal2008; @Soulsbury2010; @Widdig2007], but there is a need to update and expand the datasets that these analyses are based on. Older studies were necessarily based on a more limited body of data. For example, when @IsvaranClutton-Brock2007 assessed the proportion of conceptions "lost" to extra-group males, they could only find data on eight wild primate species. Today, data on paternity loss are available for at least `r cumulative_species_fulltab` species.
+
+In addition to increasing the total number of species available, researchers have accumulated larger samples of paternities for particular species and groups. For example, the study of red-fronted lemurs that Isravan and Clutton-Brock cited was based on 12 paternities [@WimmerKappeler2002], but a subsequent study on the same population included 49 paternities [@KappelerPort2008]. Bigger sample sizes are particularly important if there is variation in patterns of paternity distribution across time within groups, or across populations within species; evidence from some primate species suggests that this is frequently the case [@Albertsetal2003; @Rosenbaumetal2015].
+
+Compiling information about paternity distribution and phenotypic traits from primary sources is a labor-intensive task, and thus it is extremely useful when comparative databases are compiled and made available to the academic community. Comparative analyses are more powerful when they include information from more species, and they are more accurate when measurements of traits are based on larger and more representative samples. This means it is important to include all available information, and to provide a mechanism for updating databases as new data become available.
+
+We have compiled information about the distribution of paternity in wild primate groups, along with complementary information about socioecological, morphological, and behavioral characteristics that are potentially useful for testing evolutionary hypotheses about paternity distribution. A critical goal of our project is to compile all available information on paternity distribution in wild primate groups, make these data freely available to the academic community, and to create a mechanism for updating the database as new data become available. We attempt to achieve three key objectives for comparative datasets: transparency, usability, and reproducibility [@Borriesetal2016]. 
+
+Another immediate goal of our project is to use these data to answer three basic questions about paternity in primates: first, to what degree does phylogeny predict paternities obtained by alpha males in multi-male groups, and resident males in single-male groups? The answer to this question is useful for understanding the relative importance of evolutionary history versus current environmental conditions in determining paternity distribution. 
+
+Our second question is, what is the magnitude of paternity loss for resident males? We compare how this differs for males living in socially monogamous pairs and single-male/multi-female groups, and top-ranked (alpha) males living in  multi-male/multi-female groups. This is a test of the widely-accepted (and thus far well-supported) prediction that paternity loss should be a function of group structure, where males in socially monogamous pairs have the highest paternity certainty and those in multi-male/multi-female groups the least [@Clutton-BrockIsvaran2006]. We also investigate whether proportion of paternities obtained is influenced by reproductive seasonality. This is a test of the prediction that males in species where female fertility is highly synchronized will have more difficulty monopolizing mating opportunities, which some prior metanalyses have found evidence for [e.g., @Paul1997; @Ostneretal2008] and some have not [e.g., @KutsukakeNunn2006]. Understanding the magnitude of group composition and seasonality effects is useful for understanding the selective pressures shaping male reproductive strategies. 
+
+Third, we answer the question, when alpha males lose paternity in multi-male groups, who are they losing it to: other residents, or males outside their social group? This is useful for understanding the source of male-male competition, and the tradeoffs males make when they are either forced to, or choose to, live in social groups with other males. 
+
+# Methods
+
+## Data compilation
+
+### Sources of information
+
+During the dark days of COVID, JBS and SR conducted searches for primate paternity data in Google Scholar, using a variety of key words: paternity, male reproductive success, reproductive skew, mating system, inbreeding, kin discrimination, and kin recognition. We also tracked citations from lists previously compiled by others. In almost all cases, we obtained values from the original publications, not from secondary sources; the few exceptions are noted and full references provided in the database. For published abstracts, we contacted the lead authors and requested information about the distribution of paternity. In these cases, the abstract is cited along with a notation that more detailed data were obtained through personal communication with the author(s).  We also contacted field researchers that we thought might have unpublished paternity data and requested any information about paternity distribution that they were willing to share.
+
+Some studies provide data from multiple social groups in the same population. When possible, we present information for each group separately. In some cases, these group-level data were available in the original publication. In other cases, we obtained information about individual groups from the authors of the original publication. In these cases, we cite the original source, along with a notation that additional data were obtained through personal communication with the authors. When we were unable to separate data from multiple groups, we compiled aggregate information and designated the group name as ‘multiple’ in the database.
+
+In some instances, there is more than one study of the same group and the paternity samples overlap (e.g., the capuchin paternities in @Munizetal2010 are a subset of the paternities in @Godoyetal2016). In these cases, all the studies are included, and their overlap is indicated in the table, along with information about which one contains the largest sample size. To avoid duplication of data, our analyses are based on the study with the largest sample size.
+
+### Types of information
+
+Below we describe the data we aggregated, loosely subdivided into types of information for organizational purposes. We combined information from the paternity studies we used with information from other studies of the relevant species. The data are arranged so that each row corresponds to a particular social group (whenever possible) or to an aggregation of multiple social groups (when it was not possible to extract group-level statistics from a given publication).
+
+#### Study identification
+
+In order to identify individual studies and track entries over time, we include the reference to the paper the data came from, the year the paper was published, the data source (i.e., whether it was primary data or secondary), and the date we added the study to our table. These variables are listed in Table `r tbl_studyid_num`.
+
+```{r study-identification-table, echo=FALSE}
+
+# Variables to include
+variables_of_interest <- c(
+  "reference", 
+  "publicationyear", 
+  "datasource", 
+  "dateofentry"
+)
+
+# Descriptions for each variable
+descriptions <- c(
+  reference = "Study the data came from",
+  publicationyear = "Publication year",
+  datasource = "Primary or secondary data source; if secondary, refs in notes",
+  dateofentry = "Date that study was entered into the database"
+)
+
+# Build the table
+variable_table <- tibble(
+  `Variable name` = variables_of_interest,
+  `Variable description` = descriptions[variables_of_interest]
+) %>%
+  gt() %>%
+  tab_header(
+    title = paste0("Table ", tbl_studyid_num, ". Study identification variables")
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size = px(13),              
+    table.align = "left"                   
+  )
+
+variable_table
+```
+
+
+#### Background information
+
+```{r provision-counts, echo=FALSE, results='hide'}
+
+n_provisioned <- data %>%
+  filter(condition != "wild") %>%
+  nrow()
+
+n_provisioned_not_excluded <- data %>%
+  filter(condition != "wild", is.na(exclude_entry) | exclude_entry == "") %>%
+  nrow()
+
+n_provisioned_species <- data %>%
+  filter(condition != "wild") %>%
+  summarise(n_species = n_distinct(species_10ktrees)) %>%
+  pull(n_species)
+
+n_provisioned_s <- as.character(n_provisioned)
+n_provisioned_not_excluded_s <- as.character(n_provisioned_not_excluded)
+n_provisioned_species_s <- as.character(n_provisioned_species)
+
+```
+
+Background information variables are listed in Table `r tbl_context_num`. For each study, we provide information about the location and name of the field site, whether the animals were provisioned or not (n=`r n_provisioned_s` studies on `r n_provisioned_species_s` species reported that the animals were provisioned or commensal in some way), the years in which paternity data were collected, what sample matrix or matrices the DNA was obtained from, the number of loci that were evaluated, the paternity confidence levels that were used, and whether the analyses were primarily longitudinal or cross-sectional. As described above, we also noted whether there was known data overlap with other studies, and if so, which of the studies was the largest/newest. We did not encounter any cases where the newest publication did not also contain the largest number of paternities.
+
+```{r study-context-table, echo=FALSE}
+
+# Variables to include in Table 2
+
+variables_of_interest_2 <- c(
+  "country",
+  "field_site",
+  "condition",
+  "year_first",
+  "year_last",
+  "n_yrs_sampled",
+  "sample_matrix_1",
+  "loci_lo",
+  "loci_hi",
+  "paternity_conf_strict",
+  "paternity_conf_relax",
+  "long_or_cross",
+  "study_overlap",
+  "study_overlap_name",
+  "newest_biggest"
+)
+
+# Descriptions for Table 2 variables
+descriptions_2 <- c(
+  country = "Country where the study was conducted",
+  field_site = "Name of the field site",
+  condition = "Whether the population was provisioned or wild-feeding",
+  year_first = "Earliest year included in study",
+  year_last = "Latest year included in study",
+  n_yrs_sampled = "Number of years sampled",
+  `sample_matrix_1` = "Type of matrix used (e.g., feces, tissue)",
+  loci_lo = "Minimum number of loci used",
+  loci_hi = "Maximum number of loci used",
+  paternity_conf_strict = "Paternity confidence level (strict)",
+  paternity_conf_relax = "Paternity confidence level (relaxed)",
+  long_or_cross = "Whether analysis was primarily cross-sectional or longitudinal",
+  study_overlap = "Do paternity data in this study overlap with another study?",
+  study_overlap_name = "If there is overlap with another study, which one?",
+  newest_biggest = "If there is overlap with another study, is this study the newest/biggest?"
+)
+
+# Build/display table
+variable_table_2 <- tibble(
+  `Variable name` = variables_of_interest_2,
+  `Variable description` = descriptions_2[variables_of_interest_2]
+) %>%
+  gt() %>%
+  tab_header(
+    title = paste0("Table ", tbl_context_num, ". Study context and sample characteristics")
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size = px(13),
+    table.align = "left"
+  ) %>%
+  tab_footnote(
+    footnote = "Actual table contains sample_matrix_1, sample_matrix_2, etc. up to sample_matrix_6, because some studies include DNA from multiple sources (e.g. feces and tissue).",
+    locations = cells_body(rows = `Variable name` == "sample_matrix_1")
+  )
+
+variable_table_2
+```
+
+
+#### Study subject characteristics
+
+Study subject variables are listed in Table `r tbl_taxonomy_num`. We include the common and scientific species name provided by the authors of the study, as well as the genus, species, and where applicable subspecies name used by the 10kTrees website [@Arnoldetal2010] used to generate our phylogenetic distance matrix (necessary for answering our question about the degree to which phylogeny predicts paternity loss, and to control for phylogenetic relatedness when answering other questions). In most cases these names were identical. Occasionally they were different due to updates in classification (e.g., 10kTrees uses the older, monogeneric _Callicebus_ classification for titi monkeys, while one of the studies we included uses _Plecturocebus_ [@Dolotovskayaetal2020], because 10kTrees did not contain an exact match (e.g., it did not have _Brachyteles hypoxanthus_, so we used _B. arachnoides_), or because the study did not use a subspecies name while 10kTrees required it (e.g., few published studies distinguish between _Pan troglodytes_ subspecies, while 10kTrees requires specification of either _P. t. versus_ or _P. t. schweinfurthii_). 
+
+We also recorded the names of the social groups whenever they were provided; in cases where numbers from multiple groups were aggregated, we recorded the group name as ‘multiple_’ followed by the name of the field site (e.g. multiple_Amboseli). We also classified groups based on the number of adult residents of each sex living together as a cohesive unit, rather than the presumed mating system for the taxa. Group composition was categorized as follows: MF = one resident (adult) male and one resident (adult) female, which we refer to as pair-living; MFF = one resident male and two or more resident females; MMF = two or more resident males and one resident female; MMFF = two or more resident adults of each sex. These abbreviations are used in tables and figures throughout our analyses. In some cases, group composition changed across time (e.g. from MF to MFF), so we tabulated data separately for each group composition type whenever possible. 
+
+```{r table-3-taxonomy, echo=FALSE}
+
+# Variables for Table 3
+
+variables_of_interest_3 <- c(
+  "suborder",
+  "infraorder",
+  "parvorder",
+  "family",
+  "common_name",
+  "sci_name_inpaper",
+  "genus_10ktrees_str",
+  "species_10ktrees_str",
+  "subspecies_10ktrees_str",
+  "genus_species_subspecies",
+  "genus_10ktrees",
+  "species_10ktrees",
+  "subspecies_10ktrees",
+  "social_grp",
+  "grp_composition"
+)
+
+# Descriptions
+descriptions_3 <- c(
+  suborder = "Is the species a Haplorrhine or Strepsirrhine?",
+  infraorder = "What infraorder does the species belong to?",
+  parvorder = "What parvorder does the species belong to (if applicable)?",
+  family = "What family does the species belong to?",
+  common_name = "Species common name",
+  sci_name_inpaper = "Scientific name authors used in paper (string variable)",
+  genus_10ktrees_str = "Genus name used in the phylogenetic matrix (string variable)",
+  species_10ktrees_str = "Species name used in the phylogenetic matrix (string variable)",
+  subspecies_10ktrees_str = "Subspecies name used in the phylogenetic matrix (string variable)",
+  genus_species_subspecies = "Species classification from 10kTrees (factor variable)",
+  genus_10ktrees = "Genus name from 10kTrees (encoded)",
+  species_10ktrees = "Species name from 10kTrees (encoded)",
+  subspecies_10ktrees = "Subspecies name from 10kTrees (encoded)",
+  social_grp = "Name of the social group (when known)",
+  grp_composition = "Group composition (MF, MFF, MMF, MMFF)"
+)
+
+# Build/display the table
+variable_table_3 <- tibble(
+  `Variable name` = variables_of_interest_3,
+  `Variable description` = descriptions_3[variables_of_interest_3]
+) %>%
+  gt() %>%
+  tab_header(
+    title = paste0("Table ", tbl_taxonomy_num, ". Study subject characteristics")
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size = px(13),
+    table.align = "left"
+  ) %>%
+  tab_footnote(
+    footnote = "When data from multiple groups are aggregated, the entry is recorded as multiple_name of field site (e.g., multiple_Amboseli).",
+    locations = cells_body(rows = `Variable name` == "social_grp")
+  )
+
+variable_table_3
+```
+
+
+#### Information about paternity distribution
+
+Paternity distribution measures are listed in Table `r tbl_paternity_num`. Authors use different metrics to report paternity results, but for the majority of studies it is possible to tabulate the total number of paternities tested along with (a) the number of paternities obtained by the resident male in groups that include only one male, or (b) the number of paternities obtained by the top-ranking (alpha) male in groups that include more than one male. We categorized (a) and (b) together as ‘primary’ males. We also extracted the number sired by other group residents of 1) known rank and 2) unknown rank. Note that the second category includes studies where the rank(s) of the males in question were unknown due to lack of behavioral data, where they were not reported, or where the authors were unable to conclusively assign a single in-group male as the father. In addition, we extracted the number of individuals that were sampled but for whom paternity remained undetermined, number of extra-group paternities, number where whether the paternity was extra-group was ambiguous, number sired by the single most successful male in the study, and number sired by all other (i.e., not most successful) males combined. These categories are not necessarily mutually exclusive, so the summed totals across rows do not necessarily match the total number of individuals that were sampled. For example, a given paternity could appear in both the column that tabulates the number of individuals for whom paternity was undetermined and in the column that tabulates instances where extra-group paternity was ambiguous, because the authors identified two equally likely potential sires but did not have demographic data to determine whether these potential sires were residents of the group at the time of conception.
+
+In addition to such count data, some studies report other metrics such as the mean rank of sires or the B-index of reproductive skew [@Nonacs2000]. While Nonac's B-index (NB) suffers from flaws (namely, increasing values in larger group sizes are a statistical artifact of the way the index is constructed [@KutsukakeNunn2006; @Rossetal2020]), it remains the most commonly reported skew index value in the primate literature. We did not recalculate NB or mean rank of sires if they were not provided by the authors, because the necessary data to make these calculations were often unavailable. In cases where multiple NB values were included in a single study (e.g. at multiple points in time), we recorded all available NB values, confidence intervals, and p-values. When possible, we also recorded whether or not the authors had genetic data for all of the resident males.
+
+No single study had all of these metrics available, and some had only a small number of them. When we had meaningful doubt about our ability to accurately calculate or extract a desired metric, we emailed the first author of the study to request clarification. In some cases they did not respond, in which case we left out a number that in theory could have been calculated. If the authors of any of our included studies find mistakes or fillable gaps in the table, we welcome the chance to update our existing information and to add new information. For studies where so little information was extractable that they cannot be included in any of the present analyses, we still recorded them in the interest of maintaining a complete list of studies that have primate genetic paternity data.
+
+```{r table-4-skewmetrics, echo=FALSE}
+
+# Variables for Table 4
+
+variables_of_interest_4 <- c(
+  "n_paternities",
+  "n_alphaprimary",
+  "n_residents_knownrank",
+  "n_residents_unknownrank",
+  "n_tested_undetermined",
+  "n_egp",
+  "n_egp_ambiguous",
+  "n_sired_mostsuccess",
+  "n_sired_othermales",
+  "mean_sire_rank",
+  "meanrank_standard",
+  "nonacs_b",
+  "ciforbindex_low",
+  "ciforbindex_high",
+  "nonacsb_p"
+)
+
+# Descriptions for each variable
+descriptions_4 <- c(
+  n_paternities = "Number of paternities tested",
+  n_alphaprimary = "Number of paternities attributed to the alpha or resident male",
+  n_residents_knownrank = "Number of paternities attributed to resident males of known rank",
+  n_residents_unknownrank = "Number of paternities attributed to resident males of unknown rank",
+  n_tested_undetermined = "Number of paternities that were tested but specific sire was not determined",
+  n_egp = "Number of established extra-group paternities (EGPs)",
+  n_egp_ambiguous = "Number of paternities that cannot be confidently assigned as either EGPs or resident sirings",
+  n_sired_mostsuccess = "Number of paternities attributed to the most successful male",
+  n_sired_othermales = "Number of paternities attributed to all other (not most successful) males",
+  mean_sire_rank = "Mean dominance rank of sires, when ranks are known",
+  meanrank_standard = "Is mean rank of sires standardized (Y/N)?",
+  nonacs_b = "Nonac's B index of reproductive skew",
+  ciforbindex_low = "Lower CI for Nonac's B",
+  ciforbindex_high = "Upper CI for Nonac's B",
+  nonacsb_p = "p-value for Nonac's B"
+)
+
+# Build/display the table
+variable_table_4 <- tibble(
+  `Variable name` = variables_of_interest_4,
+  `Variable description` = descriptions_4[variables_of_interest_4]
+) %>%
+  gt() %>%
+  tab_header(
+    title = paste0("Table ", tbl_paternity_num, ". Paternity distribution information")
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size = px(13),
+    table.align = "left"
+  ) %>%
+  tab_footnote(
+    footnote = "When a study contained Nonac's B-index values from >1 point in time, these are recorded as nonacs_b_t2 and nonacs_b_t3. The same applies to the ciforbindex_low and _high entries (which contain the low and high confidence intervals associated with a B-index at t, t2, t3), and to the nonacsb_p entries (which contain the p values associated with the B-indexes).",
+    locations = cells_body(rows = `Variable name` == "nonacs_b")
+  )
+
+variable_table_4
+```
+
+#### Information about the species
+
+Species-level information is listed in Table `r tbl_traits_num`. This was almost always obtained from sources other than the genetic paternity studies in our table; much of it came from @KamilarCooper2013 and @Lupoldetal2019. We recorded whether they were seasonal breeders, whether they live in a multilevel society, morphological data relevant to dimorphism and sexually selected traits, information about species-typical adult group member composition, and the adult sex ratio. Not all measures were available for all species. Many of the available measures rely on older data or small sample sizes. If experts on a given species are able to provide more up-to-date species-level information, we welcome the opportunity to improve our table.
+
+```{r table-5-speciestraits, echo=FALSE}
+
+# Variables for Table 5
+
+variables_of_interest_5 <- c(
+  "seasonality_5c*",
+  "seasonality_5c_2*",
+  "seasonality_3c*",
+  "multilevel",
+  "philopatry_pattern",
+  "pairbond_type",
+  "gestation_length",
+  "testes_mass",
+  "litter_size",
+  "mean_rainfall_mm",
+  "mean_male_mass",
+  "mean_female_mass",
+  "mass_dimorphism",
+  "canine_dimorphism",
+  "mean_grp_size",
+  "mean_num_males",
+  "mean_num_females",
+  "adult_sex_ratio"
+)
+
+# Corresponding descriptions
+descriptions_5 <- c(
+  "seasonality_5c*" = "Degree of birth seasonality in natural habitat (1=most, 5=none)",
+  "seasonality_5c_2*" = "Degree of birth seasonality in natural habitat (1=most, 5=none)",
+  "seasonality_3c*" = "Degree of birth seasonality in natural habitat (1=most, 3=none)",
+  "multilevel" = "Does species live in multilevel society?",
+  "philopatry_pattern" = "Primarily male or female philopatric?",
+  "pairbond_type" = "In MF groups, are pairs dispersed or cohesive?",
+  "gestation_length" = "Gestation length (days)",
+  "testes_mass" = "Combined weight of testicles (g)",
+  "litter_size" = "Mean litter size",
+  "mean_rainfall_mm" = "Mean precipitation (mm)",
+  "mean_male_mass" = "Average male weight (g)",
+  "mean_female_mass" = "Average female weight (g)",
+  "mass_dimorphism" = "Weight dimorphism value",
+  "canine_dimorphism" = "Canine dimorphism value (canine length)",
+  "mean_grp_size" = "Average size of social group",
+  "mean_num_males" = "Average number of males who live in a social group",
+  "mean_num_females" = "Average number of females who live in a social group",
+  "adult_sex_ratio" = "Ratio of adult females to adult males"
+)
+
+# Build/display table
+variable_table_5 <- tibble(
+  `Variable name` = variables_of_interest_5,
+  `Variable description` = descriptions_5[variables_of_interest_5]
+) %>%
+  gt() %>%
+  tab_header(
+    title = paste0("Table ", tbl_traits_num, ". Ecological, morphological, and life history traits")
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size = px(13),
+    table.align = "left"
+  ) %>%
+  tab_footnote(
+    footnote = "Birth seasonality classifications were obtained from Heldstab 2021. Heldstab includes three different classification schemes; our dataset includes all three.",
+    locations = cells_body(rows = `Variable name` %in% c("seasonality_5c*", "seasonality_5c_2*", "seasonality_3c*"))
+  )
+
+variable_table_5
+```
+
+
+### Frequency of extra-group paternities (EGPs)
+
+Many studies report the number of paternities obtained by males from outside the group (extra-group paternities, EGP). In some cases, paternity was assigned to specific extra-group males who had been sampled. In other cases, all resident males were sampled and could be excluded from paternity, and we assigned these paternities to extra-group males. If not all potential sires from within the group were sampled, paternities that could not be assigned to known male residents were categorized as ambiguous (variable n_egp_ambiguous). 
+
+### Proportion of conceptions by primary male and extra-group males 
+
+For cases in which all paternities could be assigned to primary males, other resident males, or extra-group males, the exact proportions of paternities by the primary male, other residents, and extra-group males were calculated by dividing the number of paternities in each category by the sum of paternities by primary males, other residents, and extra-group males.
+
+In cases in which some paternities were categorized as residents of unknown rank, we calculated minimum and maximum estimates of the proportion of paternities obtained by primary males. To calculate the minimum estimate, we assumed that none of paternities attributable to residents of unknown rank were sired by primary males. We divided this number of paternities by the sum of all paternities (i.e., infants sired by the primary male, other residents, EGPs, and cases where it was ambiguous whether it was an EGP or in-group siring). To calculate the estimate of the maximum proportion sired by primary males, we assumed that all paternities in this category were sired by primary males, and divided by the same sum to obtain the proportion sired by primary males. The actual figure lies somewhere in between these two values. 
+
+Similarly, in cases in which some paternities were categorized as “ambiguous”, we calculated minimum and maximum estimates of the proportion of paternities by extra-group males. To calculate the minimum estimate, we assumed that all paternities in this category were sired by resident males, and divided the number of paternities by extra-group males by the sum of total paternities. To calculate the maximum estimate, we assumed that all paternities in this category were sired by extra-group males, and divided by the same sum. The actual figure lies somewhere in between these two values.  
+
+### Theoretical model
+
+To clarify what data would ideally be needed to test the relationship between competition and paternity, and to make explicit the assumptions that underlie our empirical approach, we developed a simple formal theoretical framework. We assume that the proportion of paternities ($p$) that a primary male in a social group will obtain is, at its most basic, a function of two things: first, the number of competitors that he has ($n$), and second, the degree to which the mating opportunities in his group are monopolizable ($m$) [e.g., @KutsukakeNunn2006]. In other words:
+
+$$
+p=f(n,m)
+$$
+
+We will assume that as $n$ increases, $p$ should decrease (because more competitors likely equals more paternities lost), and that as $m$ increases, $p$ should increase (because greater monopolizability should mean more paternities gained). A simple model of this relationship could be:
+
+$$
+p=\frac{m}{m+n}
+$$
+Figure `r fig_simulation` contains a visualization of these dynamics. Note that this is in most respects just a recapitulation of Altmann’s priority-of-access model [@Altmann1962], but it 1) focuses specifically on the paternity share of one animal (i.e., the primary male), 2) replaces the number of estrus females with fertile female:male ratio, and 3) makes no assumptions about the competitive abilities of individual males.
+
+
+```{r monopolizability-simulation-plot, fig.width=10, fig.height=4, fig.align="left", echo=FALSE, fig.cap=fig_simulation_cap}
+
+# Create 105 observations
+n_obs <- 105
+N <- rep(0:20, times = 5)                     # 21 values (0 to 20) for each ratio
+group <- rep(1:5, each = 21)                  # Assign group IDs
+ratio <- recode(group, `1` = 5, `2` = 2, `3` = 1, `4` = 0.5, `5` = 0.2)  # Fertile F:M ratios
+M_simulated <- 1 / ratio                      # Higher M = more monopolizability
+P_simulated <- M_simulated / (M_simulated + N)  # Proportion paternities
+
+# Combine into a data frame
+sim_data <- data.frame(N, group, ratio, M_simulated, P_simulated)
+
+# Define color mapping
+color_map <- c("5:1 (Low monopolizability)" = "#56B4E9",
+               "2:1" = "#009E73",
+               "1:1" = "#E69F00",
+               "1:2" = "#D55E00",
+               "1:5 (High monopolizability)" = "#CC79A7")
+
+# Prepare labeled data
+sim_data <- sim_data %>%
+  mutate(
+    ratio_factor = factor(
+      case_when(
+        ratio == 5   ~ "5:1 (Low monopolizability)",
+        ratio == 2   ~ "2:1",
+        ratio == 1   ~ "1:1",
+        ratio == 0.5 ~ "1:2",
+        ratio == 0.2 ~ "1:5 (High monopolizability)"
+      ),
+      levels = names(color_map)
+    )
+  )
+
+# Plot
+ggplot(sim_data, aes(x = N, y = P_simulated, group = ratio_factor)) +
+  geom_line(aes(color = ratio_factor), linewidth = 1.2) +
+  scale_color_manual(values = color_map, name = "Monopolizability ratio") +
+  labs(
+    title = "Effect of competitors and monopolizability on paternity",
+    x = "Number of competitors (n)",
+    y = "Proportion of paternities (p)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "right",
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 10),
+    plot.title = element_text(size = 13, face = "plain"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+Since competition can come from either males within the same social group or males from outside of it, $n$ can further be broken out as follows:
+
+$$
+p=\frac{m}{m + \alpha n_{\text{in}} + \beta n_{\text{out}}}
+$$
+
+where $n_{\text{in}}$ is the number of within-social group competitors a male faces, $n_{\text{out}}$ is the number of extra-group competitors he faces, and $\alpha$ and $\beta$ are weighting parameters that indicate the relative strength of intra- and extra-group competitors (e.g., in mountain gorillas, extra-group competitors seem to be harder to drive off, perhaps because they are more motivated to fight for mating opportunities [@RobbinsSawyer2007]).
+
+The value of having the theoretical framework is that it makes it clear precisely what data would be needed for a rigorous test. Specifically, we would need: (1) conception-level data on social conditions at the time each offspring was sired, rather than paternity proportions aggregated over long time periods; (2) a continuous measure of the number of competitors, including some way to separately quantify within-group ($n_{\text{in}}$) and extra-group ($n_{\text{out}}$) competition; and (3) a direct measure of monopolizability at the time of conception, rather than a species-level proxy. 
+
+Few papers that contain paternity data report this information. Due to primates’ slow life histories and the realities of sample collection and analysis, paternity determination usually does not happen until months or even years after offspring are born. The social conditions of the father at the time of conception of a given offspring are frequently omitted from studies, sometimes because they are not available, and sometimes because they are not of interest. Small sample sizes mean that often data are aggregated over many years. However, unless group composition and number of mating opportunities are extremely stable, statistics like the proportion of infants sired by primary male(s) across long time periods hides the potentially considerable amount of variation in social conditions that may have occurred at the point of the conception, which is the biologically relevant time window.
+
+Given these constraints, our empirical analyses depart from the theoretical model in several ways. We operationalized the number of competitors as a binary indicator of group composition (single-male vs. multi-male), which collapses the (ideally) continuous $n_{\text{in}}$ term to a categorical variable and leaves $n_{\text{out}}$ unmeasured. For monopolizability, we used a species-level index of reproductive seasonality [@Heldstabetal2021]. This assumes that $m$ is a reasonable proxy for the temporal distribution of fertile periods, a potentially questionable assumption [see, e.g., @Ostneretal2008; @GogartenKoenig2013] but also ignores others potentially important factors such as female spatial distribution. 
+
+While these metrics are much less precise than individual conception-level information would be, they are reasonable proxies given the constraints of  currently available data. The theoretical model helps make these compromises and their implications transparent. More details on our empirical implementation are provided below in the data analysis section. 
+
+### Data analysis
+
+All analyses were run in R 4.3.2 and all models were fit using brms [@Burkner2017], a flexible software package for fitting Bayesian multilevel models with a variety of response distributions, link functions, and prespecified correlation structures. These features make brms well-suited to our phylogenetic analyses of paternity patterns. We first constructed a phylogenetic covariance matrix using the consensus primate tree available from 10kTrees [@Arnoldetal2010] that is included in all models below as a random effect with a covariance structure corresponding to evolutionary distances between species (see [@Burkner2025] for a vignette of these models in brms). 
+
+The proportion of paternity for a given class of males (i.e., primary, resident, extra-group) can span the entire range from 0 to 1. While Beta regression is a popular option to model proportions as response variables, it cannot accommodate proportions at either extreme–i.e., exactly 0 or exactly 1, a situation which is common in our data set. While there are modifications that can accommodate values of exactly 0 and/or 1 (e.g., zero-one inflated Beta [@LiuKong2015]), an underlying assumption of such models is that the processes that produces 0s, 1s, or both are different in some way than the processes that produce the rest of the distribution. We do not think that this is a biologically defensible stance for our analysis. The fundamental processes that produce 0s and 1s are likely the same as the ones that produce less extreme values. Furthermore, _true_ 0s and 1s are probably unlikely to occur in the real world. It seems more  likely that our 0 and 1 values are the result of small sample sizes and the potential for biased sampling of certain paternities, than that there are species in the real world where primary males either obtain every possible paternity or never obtain any of them. Thus, in order to use a standard Beta regression model, we replaced observed proportions of 1 with 0.999, and observed proportions of 0 with 0.001.  
+
+For our first analysis examining the influence of phylogeny alone (Question 1 in the results), we specified our models predicting our various operationalizations of paternity proportions as:
+
+$$
+\text{logit}(\mu_i) = \tau_{\text{phylo}[i]} + \tau_{\text{species}[i]}
+$$
+where the observation-level paternity proportions ($\mu_i$) are predicted by random effects ($\tau$) for phylogeny and species. The $\tau_{\text{phylo}[i]}$ term captures variation due to phylogenetic relatedness between species, and its variance quantifies the amount of interspecies variation that is attributable to phylogeny. The $\tau_{\text{species}}$ term estimates interspecific variance not explained by phylogenetic relatedness. From these estimates, we calculated the phylogenetic signal ($\lambda$) by dividing the total variance from phylogeny  ($\sigma^2_{\text{phylo}}$) by the sum of the variance attributable to phylogeny plus the variance attributable to species-specific variation that is not explained by phylogeny:
+
+$$
+\lambda = \frac{\sigma^2_{\text{phylo}}}{\sigma^2_{\text{phylo}} + \sigma^2_{\text{nonphylo}}}
+$$
+
+Thus, $\lambda$ is the proportion of interspecies variance that is phylogenetically structured. Another way to state this is that it answers the question “of the variation in primary male paternity share between species, how much of it is explained by phylogeny?” This is analogous but not identical to Pagel's $\lambda$ [@Pagel1999], which is estimated by directly transforming the phylogenetic tree to find the best fit to the data and incorporates total residual variance. Unlike Pagel's, our $\lambda$ is a ratio of the variance components that are derived from the model's random effects, and excludes observation-level variance from the Beta distribution. We chose this approach because it directly addresses the between-species question and benefits from the observation weights and Beta likelihood included in the model.
+
+Our second question is about the role that male-male competition and monopolizability play in primary males' paternity share (Question 2 in the results). To evaluate their effects, first, we conducted a basic analysis that compares primary male paternity share values in multi-male, single-male, and pair-living groups; we present the raw data but also model-derived estimates that account for phylogeny and sample size (Analysis 1 in the results). Second, to determine how the combined influences of competition and seasonality affect paternity share (Analysis 2 in the results), we turned to our theoretical model described above ($p=m/(m+n)$). This model assumes a fixed functional relationship among the variables--specifically, that paternity share is determined by the ratio of monoplizability to competitive pressure exerted by other males. This is a useful conceptual foundation but may be too restrictive to capture the range of empirical variation observed across species. To allow for more flexibility, including potential non-linear effects of competitors and monopolizability, we constructed a model that contained main effects for both $n$ and $m$ plus an interaction between the two, as well as a squared term for $m$, while retaining the same random effects structure described above:
+
+$$
+\text{logit}(\mu_i) = \alpha + \beta_1 n_i + \beta_2 m_i + \beta_3 m_i^2 + \beta_4 (n_i \cdot m_i) + \tau_{\text{phylo}[i]} + \tau_{\text{species}[i]}
+$$
+While ideally we would also include a squared term for $n$, because we were only able to operationalize competitors as a categorical variable where 0=no in-group competitors (i.e., males living in single-male groups) and 1=one or more in-group competitors (i.e., males living in multi-male groups), a squared term would be entirely redundant with the main effect term. Monpolizability was operationalized as a reproductive seasonality variable obtained from @Heldstabetal2021. For this, lower values indicate more seasonality (and thus lower monpolizability) and higher values equal less seasonality (and thus higher monpolizability). To interpret the results we plotted the marginal effects and computed the partial derivative ($\partial$) of $logit(\mu_i)$ with respect to monopolizability ($\frac{\partial \, \text{logit}(\mu_i)}{\partial m}$), evaluated at the mean of $m$. For reporting purposes we transformed it to the response scale via the chain rule, which provides the estimated change in paternity share per unit increase in monopolizability. For the binary competitor variable $n$, we interpret the contrast in predicted values between single-male and multi-male groups.
+
+To answer our third question, about who primary males lose paternities to (Question 3 in the results), we fit a binomial generalized linear mixed model (GLMM). Here, the outcome variable is the number of EGPs for a given observation, treated as the number of "successes" out of total count of paternities not attributed to the primary male (i.e., EGPs plus sirings by non-primary, in-group males). Formally, we specified this as:
+
+$$
+\text{EGP}_i \sim \operatorname{Binomial}(n_i, \pi_i) \\
+\text{logit}(\pi_i) = \alpha + \tau_{\text{phylo}[i]} + \tau_{\text{species}[i]}
+$$
+
+where $\text{EGP}_i$ is the observed number of EGPs for observation $i$, $n_i$ is the total number of non-primary-male paternities for that observation, and $\pi_i$ is the probability that a non-primary-male paternity is attributable to an extra-group male. For this model we kept our zero-loss observations as zeros rather than rounding to 0.001, because in this case we were modeling counts (i.e., "0 trials out of X trials") rather than a continuous distribution of probabilities. Again, zeros likely do not represent a fundamentally different biological sampling process as non-zeros, so we elected not to use (e.g.) a hurdle or zero-inflated model.  
+
+All Beta regression models were weighted by the square root of the total number of paternities in a given study, to assign greater weight to larger studies that had more precise estimates of paternity distribution proportions. For the binomial model (Question 3), no additional weighting was applied because the binomial likelihood already accounts for sample size through the number of trials. We set a Gaussian (normal) prior on the intercept, centered at 0 (SD=1) on the logit scale. This means we set a weak prior centered on primary males obtaining 50% of paternities, while allowing for significant uncertainty and a wide range of plausible values. For the standard deviation of the random effects and the distribution precision parameter ($\phi$), we used Student’s t-distribution priors (df=3, center=0, scale=2.5). These are weakly informative, to allow for the possibility of substantial species-level variation and data dispersion, both of which we observed in our initial data exploration. We used the same strategy for the binomial model, except that the precision parameter was excluded.   
+
+In some cases in the results we refer to the categories of multi-male groups and single-male groups without specifying female group composition. Multi-male refers to a combined category of MMFF and MMF observations, while single-male refers to a combined category of MF and MFF. In this scheme, the multi-male category contains the types of groups where males face competition from group members in addition to any competition from extra-group males, while the second contains groups where all competition comes from extra-group males. Because pair-living (i.e., MF) and multi-male/single-female (MMF) group types are relatively uncommon in our data, treating all four as separate categories was not always feasible due to model convergence issues. Where there was theoretical justification for doing so, we selectively removed pair-living and multi-male/single female observations from the data and report whether these exclusions make a difference to the results.     
+
+### Living table and results
+
+Across scientific disciplines, researchers have recognized the value of building "living" systematic reviews and/or databases. While there are numerous tools, techniques, and strategies for providing these resources, all of these approaches share a common goal of creating scientific products that facilitate mechanisms for update [see e.g., @Elliottetal2017; @Mochaetal2024]. In deciding how to structure the database and the results derived from it in a continually updateable format, we drew inspiration from the Cochrane Guidance for Living Systematic Reviews [@Brookeretal2019]. Below are the core features of our living resources:
+
+1) The results reported below in this static manuscript are based on the current version of the table as of March 2026. 
+
+2) Twice a year, we will perform a new search for relevant data, using a strategy identical to the one described above in Data compilation, and we will accordingly update the table with any new data published since the last search.
+
+3) If new data are identified, the relevant features are extracted, screened, and aggregated according to the methods described above.
+
+4) We provide the most current version of the paternity dataset on an open-access Github repository (https://github.com/slrosen/primate-paternity-metanalysis). We document all updates made to the underlying dataset in a README file. Additionally, in the dataset we include a column listing the date each row was added or updated (variable dateofentry). 
+
+5) The most current version of our results, as well as any previous versions, are also posted in the same open-access Github repository.
+
+## Results
+
+**Description of the data set**
+
+```{r basic-data-description, echo=FALSE, results='hide'}
+
+# All entries in the dataset (including excluded ones)
+n_total_entries <- nrow(data)
+
+# Entries excluded from analyses because they are redundant or irrelevant
+n_excluded <- sum(grepl("^Yes", data$exclude_entry, ignore.case = FALSE) & 
+        !grepl("no total n, see notes", data$exclude_entry, ignore.case = TRUE), na.rm = TRUE)
+
+# Entries included in analyses (exclude_entry is NA or empty)
+data_clean <- data %>%
+  filter(is.na(exclude_entry) | exclude_entry == "")
+n_analysis_entries <- nrow(data_clean)
+
+# Species, genera, and families across all entries (including excluded)
+n_species_total <- n_distinct(data$species_10ktrees) # use this version so it doesn't count subspecies
+n_families <- n_distinct(data$family)
+n_genera <- n_distinct(data$genus_10ktrees)
+
+# Total paternities, excluding entries marked as not newest/biggest or otherwise redundant 
+data_nonoverlapping <- data %>%
+  filter(!(exclude_entry %in% c("Yes (not newest/biggest)", "Yes (redundant, see notes)")))
+total_paternities <- sum(data_nonoverlapping$n_paternities, na.rm = TRUE)
+
+# Paternities and species actually included in the present analyses (remove everything in the exclusion table)
+data_analysis <- data %>%
+  filter(is.na(exclude_entry) | exclude_entry == "") %>%
+  filter(!is.na(n_alphaprimary))  
+analysis_paternities <- sum(data_analysis$n_paternities, na.rm = TRUE)
+analysis_species <- n_distinct(data_analysis$species_10ktrees_str) # note this gets used in inline text later in place of the n from a model b/c the model is counting at subspecies level
+
+# Entries missing critical info (primary male siring counts, total n)
+n_missing_primary <- sum(is.na(data_clean$n_alphaprimary))
+n_missing_no_total_n <- sum(grepl("no total n", data$exclude_entry, ignore.case = TRUE), na.rm = TRUE)
+n_missinginfo <- n_missing_primary + n_missing_no_total_n
+n_modeled <- n_analysis_entries - n_missing_primary
+
+species_counts <- data_analysis %>%
+  count(genus_species_subspecies, name = "n") # use this version so it matches tree data (needs subspecies)
+
+# species in tree but not in the data
+to_drop <- setdiff(phylo_tree$tip.label,
+                   species_counts$genus_species_subspecies)
+
+phylotree_subset <- drop.tip(phylo_tree, to_drop)
+
+# turn tree into a ggtree object
+gtre <- ggtree(phylotree_subset)
+
+# add sample size info
+gtre$data <- gtre$data %>%
+  left_join(species_counts,
+            by = c("label" = "genus_species_subspecies"))
+
+# unique species-family pairs from the full dataset
+
+species_family <- data_analysis %>%
+  distinct(genus_species_subspecies, family)
+
+# add family info to species_counts, and keep only taxa in the plotted tree
+
+species_counts_trimmed <- species_counts %>%
+  left_join(species_family, by = "genus_species_subspecies") %>%
+  filter(genus_species_subspecies %in% phylotree_subset$tip.label)
+
+# tbl_exclusion number is pre-computed in setup chunk
+
+# ---- Data transformations used in multiple downstream analyses ----
+
+# Add row IDs to track observations across analyses
+data_clean <- data_clean %>%
+  mutate(row_id = row_number())
+
+# Subset data to multi-male and single-male groups
+data_subset_mm <- data_clean %>%
+  filter(grp_composition %in% c("MMF", "MMFF"))  
+
+data_subset_sm <- data_clean %>%
+  filter(grp_composition %in% c("MF", "MFF"))
+
+# Recode group composition: combine MMF+MMFF into MM (used in Q2 Analysis 1 and Q3)
+data_clean$grp_composition_recode <- as.character(data_clean$grp_composition)
+data_clean$grp_composition_recode[data_clean$grp_composition_recode %in% c("MMF", "MMFF")] <- "MM"
+data_clean$grp_composition_recode <- factor(data_clean$grp_composition_recode)
+data_clean$grp_composition_recode <- relevel(data_clean$grp_composition_recode, ref = "MM")
+
+# Binary recode: MM vs SM, with numeric dummy variable n (used in Q2 Analysis 2)
+data_clean <- data_clean %>%
+  mutate(
+    grp_composition_recode_binary = case_when(
+      grp_composition %in% c("MMF", "MMFF") ~ "MM",
+      grp_composition %in% c("MF", "MFF")   ~ "SM",
+      TRUE ~ as.character(grp_composition)
+    ),
+    grp_composition_recode_binary = factor(
+      grp_composition_recode_binary, 
+      levels = c("MM", "SM")
+    ),
+    n = if_else(grp_composition_recode_binary == "SM", 1, 0)
+  )
+
+# Code monopolizability variable (seasonality) and its quadratic (used in Q2 Analysis 2)
+data_clean$m <- data_clean$seasonality_3c
+data_clean$m2 <- data_clean$m^2
+
+# Define fig_tree_cap here (rather than in setup) because it needs data-derived values
+fig_tree_cap <- paste0("Figure ", fig_tree_num, ". Phylogenetic distribution and sample sizes of species in the database. The left panel shows the consensus phylogeny from 10kTrees for all species represented in the dataset. The right panel shows the number of observations (rows in the dataset) per species, colored by family. The sample size in this figure does not include n=", n_excluded + n_missinginfo, " observations that were excluded from our analyses for the reasons listed in Table ", tbl_exclusion_num, ". ")
+
+```
+
+
+Our database contains `r n_total_entries` entries from `r n_species_total` species representing `r n_genera` genera and `r n_families` families, encompassing a total of `r format(total_paternities, big.mark = ",")` non-overlapping paternities. Of these entries, `r n_excluded` were excluded up front either because of data redundancies or because they were irrelevant for our questions, while an additional `r n_missinginfo` lacked sufficient information to calculate primary male paternity share (see Table `r tbl_exclusion_num`). This left `r n_modeled` entries, `r analysis_species` species, and `r format(analysis_paternities, big.mark = ",")` paternities for the analyses presented below. The phylogenetic distribution of the species in our analysis and the number of observations per species are shown in Figure `r fig_tree`.
+
+```{r exclusion-summary-table, echo=FALSE}
+
+# Build the exclusion reasons from the exclude_entry column
+exclusion_rows <- data %>%
+  filter(grepl("^Yes", exclude_entry)) %>%
+  count(exclude_entry) %>%
+  mutate(Reason = case_when(
+    grepl("not newest", exclude_entry, ignore.case = TRUE) ~ "Study not newest/biggest",
+    grepl("redundant", exclude_entry, ignore.case = TRUE) ~ "Redundant entry",
+    grepl("no total n", exclude_entry, ignore.case = TRUE) ~ "No total n",
+    TRUE ~ "Group type/rank not applicable (genus *Pongo* only)"
+  )) %>%
+  select(Reason, n)
+
+# Add row for missing primary male data
+primary_row <- tibble(
+  Reason = "Count of primary male sirings unavailable",
+  n = n_missing_primary
+)
+
+exclusion_all <- bind_rows(exclusion_rows, primary_row) %>%
+  mutate(Reason = factor(Reason, levels = c(
+    "Study not newest/biggest",
+    "Redundant entry",
+    "Group type/rank not applicable (genus *Pongo* only)",
+    "Count of primary male sirings unavailable",
+    "No total n"
+  ))) %>%
+  arrange(Reason) %>%
+  mutate(Reason = as.character(Reason))
+
+exclusion_all %>%
+  gt() %>%
+  tab_header(
+    title = paste0("Table ", tbl_exclusion_num, ". Reasons table entries were excluded from current analyses")
+  ) %>%
+  cols_label(
+    n = "N"
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold", align = "left"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_body(columns = everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size = px(13),
+    table.align = "left"
+  ) %>%
+  tab_footnote(
+    footnote = md("For 16 entries, all from a single study of *Hapalemur griseus* (Neivergelt et al. 2002), we were unable to conclusively determine the total number of paternities tested for any social group. Thus, we could not calculate proportion sired by primary males."),
+    locations = cells_body(columns = Reason, rows = Reason == "No total n")
+  ) %>%
+  tab_footnote(
+    footnote = md("For four entries, the information contained in the entry was an alternative breakdown of another entry in the table (e.g., data aggregated at the social group level that is aggregated in another entry at the study level)."),
+    locations = cells_body(columns = Reason, rows = Reason == "Redundant entry")
+  ) %>%
+  tab_footnote(
+    footnote = md("For 41 entries, we were unable to determine the number of offspring sired by alpha/primary males. This happened for a variety of reasons, most commonly because behavioral data were unavailable at the time the siring(s) occurred."),
+    locations = cells_body(columns = Reason, rows = Reason == "Count of primary male sirings unavailable")
+  ) %>%
+  fmt_markdown(columns = Reason)
+
+```
+
+```{r tree-bar-figure, echo=FALSE, fig.cap=fig_tree_cap}
+
+# tree plot
+
+# Build unannotated tree
+base_tree <- ggtree(phylotree_subset, layout = "rectangular")
+tree_dat <- base_tree$data
+
+# Join species info (n, family) onto the tip rows
+tree_dat_annot <- tree_dat %>%
+  left_join(
+    species_counts_trimmed,
+    by = c("label" = "genus_species_subspecies")
+  )
+
+# Species (tips) in vertical plotting order
+tip_order <- tree_dat_annot %>%
+  filter(isTip) %>%
+  arrange(y) %>%
+  pull(label)
+
+# Families in *order of appearance down the tree* (unique in that order)
+family_order <- tree_dat_annot %>%
+  filter(isTip) %>%
+  arrange(y) %>%
+  pull(family) %>%
+  unique() %>%
+  rev() 
+
+
+# Now build the final tree plot with family-colored tip dots
+p_tree <- ggtree(phylotree_subset, layout = "rectangular") +
+  # colored dots at tips, mapped to family
+  # geom_tippoint(
+  #  data = tree_dat_annot %>% filter(isTip),
+  #  aes(x = x, y = y, color = family),
+  #  size = 2,
+  #  show.legend = FALSE  #hiding duplicate legend, will show the one from the bar plot
+#  ) +
+  # tip labels in black (readable), with our tuned spacing
+  geom_tiplab(
+    align      = FALSE,
+    linetype   = "dotted",
+    linesize = 0,
+    size       = 2.8,
+    lineheight = 0.8,
+    offset     = 0.3,
+    color      = "black"
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0.02, 0.15))
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_tree2() +
+  theme(
+    plot.margin = margin(5, 50, 5, 5),
+    axis.line   = element_blank(),
+    axis.text   = element_blank(),
+    axis.title  = element_blank(),
+    axis.ticks  = element_blank()
+  )
+# p_tree is combined with p_bar below; not printed standalone
+
+# Bar panel--start by making the order match
+
+# Order of species along the y-axis of the tree
+tip_order <- tree_dat_annot %>%
+  filter(isTip) %>%
+  arrange(y) %>%
+  pull(label)
+
+p_bar <- species_counts_trimmed %>%
+  mutate(
+    genus_species_subspecies = factor(
+      genus_species_subspecies,
+      levels = tip_order
+    ),
+    family = factor(
+      family,
+      levels = family_order
+    )
+  ) %>%
+  ggplot(aes(
+    x    = n,
+    y    = genus_species_subspecies,
+    fill = family
+  )) +
+  geom_col(width = 0.6) +
+  labs(
+    x = "Sample size",
+    y = NULL,
+    fill = "Family"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x        = element_text(size = 10),   
+    axis.title.x       = element_text(size = 10, face = "bold"),  
+    axis.text.y      = element_blank(),
+    panel.grid       = element_blank(),
+    plot.margin      = margin(5, 5, 5, 15),
+
+    # put legend in the top-right inside the bar panel
+    legend.position  = c(1, 1),            # (x, y) in npc coords of that panel
+    legend.justification = c(1, 1),        # anchor the legend's top-right corner 
+
+    # shrink legend appearance
+    legend.title     = element_text(size = 10),
+    legend.text      = element_text(size = 9),
+    legend.key.size  = unit(0.7, "lines"),
+    legend.spacing.y = unit(0.4, "lines"),
+    legend.spacing.x = unit(0.4, "lines"),
+    legend.key = element_rect(color = NA)
+  ) +
+  guides(
+    fill = guide_legend(
+      ncol = 1,                # vertical stack (one entry per row)
+      byrow = FALSE
+    )
+  )
+
+# Combine tree panel and bar panel
+combined_plot <- p_tree + p_bar + 
+  plot_layout(widths = c(2.2, 1)) +
+  plot_annotation(title = "Phylogenetic distribution and sample sizes of species in the database")
+
+# Save 
+ggsave(
+  "../output/plots/tree_sample_size_plot_final.pdf",
+  combined_plot,
+  width  = 8,
+  height = 10   # ⬅ intermediate vertical height
+)
+
+combined_plot
+
+```
+
+
+**Question 1: To what degree does phylogeny predict the proportion of paternities obtained by primary males?**
+
+```{r lambda-check, echo=FALSE, results='hide'}
+
+#Checking to see if we get a lambda number for # males per group that is roughly the same as what Kamilar & Cooper reported with their larger data set. Lambda is sensitive to missing values and we filtered a lot of the species out that they used; do we still get the same thing?
+
+# Load tree
+
+tree_path <- file.path("..", "data", "phylogeny", "consensusTree_10kTrees_Primates_Version3.nex")
+if (!file.exists(tree_path)) {
+  stop("Tree file not found at: ", normalizePath(tree_path, winslash = "/"))
+}
+phylo_10k <- read.nexus(tree_path)
+
+# Create subspecies-like labels in the data (append _x to species-only rows)
+ss_df <- data_clean %>%
+  filter(!is.na(mean_num_males), !is.na(genus_species_subspecies)) %>%
+  mutate(
+    lbl_raw = gsub(" ", "_", genus_species_subspecies),
+    n_us = lengths(regmatches(lbl_raw, gregexpr("_", lbl_raw))),
+    subspp_label = if_else(n_us == 1L, paste0(lbl_raw, "_x"), lbl_raw)
+  ) %>%
+  group_by(subspp_label) %>%
+  summarise(mean_num_males = mean(mean_num_males, na.rm = TRUE), .groups = "drop")
+
+# Create trait vector using these new labels
+x <- setNames(ss_df$mean_num_males, ss_df$subspp_label)
+
+# Rename species-only tips w/in the tree to look like subspecies (append _x)
+tree_ss <- phylo_10k
+is_species_only <- grepl("^[A-Z][a-z]+_[a-z]+$", tree_ss$tip.label)
+tree_ss$tip.label[is_species_only] <- paste0(tree_ss$tip.label[is_species_only], "_x")
+
+# Align 
+common <- intersect(names(x), tree_ss$tip.label)
+tree2  <- drop.tip(tree_ss, setdiff(tree_ss$tip.label, common))
+x2     <- x[tree2$tip.label]
+
+cat("Trait rows after collapse:", length(x), "\n")
+cat("Tree tips after renaming:", length(tree_ss$tip.label), "\n")
+cat("Matched (used) tips:", length(x2), "\n")   # <- ends up at 39 b/c 8 of the 47 species/subspecies used in the intercept_only_model do not have mean_num_males values
+
+# Use this if I want to check who dropped on each side
+# not_in_tree <- setdiff(names(x), tree_ss$tip.label)   # in data, missing in tree
+# not_in_data <- setdiff(tree_ss$tip.label, names(x))   # in tree, missing in data
+# head(not_in_tree); head(not_in_data)
+
+# Sanity: names must line up 1:1 for phylosig
+stopifnot(all.equal(names(x2), tree2$tip.label), sum(is.na(x2)) == 0)
+
+# Pagel's lambda
+res_lambda <- phylosig(tree2, x2, method = "lambda", test = TRUE)
+res_lambda$lambda
+ res_lambda$P     
+ res_lambda       # full output
+
+# Look at what taxa were included in the $\lambda$ analysis 
+stopifnot(exists("x2"), exists("tree2"))  # must be defined by the pipeline 
+
+included_tips <- names(x2)                 # labels used by phylosig()
+length(included_tips)
+included_tips[1:20]                        # just to verify these are the names where I added _x
+
+# Drop subspecies/_x
+species_stem <- function(lbl) {
+  sub("^([A-Za-z]+_[a-z]+).*", "\\1", sub("_x$", "", lbl))
+}
+
+# Species-level list (unique Genus_species)
+included_species <- sort(unique(species_stem(included_tips)))
+length(included_species)
+included_species[1:20]                     # verify I got rid of _x
+
+# Table with details
+included_tbl <- tibble::tibble(
+  tip_label = included_tips,
+  species   = species_stem(included_tips),
+  is_species_x = grepl("_x$", included_tips),
+  is_true_subspecies = grepl("^[A-Z][a-z]+_[a-z]+_[A-Za-z0-9]+$", included_tips),
+  trait_value = unname(x2)
+) %>%
+  arrange(species, tip_label)
+
+# View(included_tbl)  
+
+# Species -> how many tips used (should be 1 for species-only; can be >1 if subspecies present)
+by_species_counts <- included_tbl %>% count(species, name = "n_tips_used") %>% arrange(desc(n_tips_used))
+
+# Optional code to save lists if needed for elsewhere
+# writeLines(included_tips,   "lambda_included_tip_labels.txt")
+# writeLines(included_species,"lambda_included_species.txt")
+# readr::write_csv(included_tbl, "../output/tables/lambda_included_table.csv")
+# readr::write_csv(by_species_counts, "../output/tables/lambda_included_by_species_counts.csv")
+
+# Print summary
+cat("Tips used (n):", length(included_tips), "\n")
+cat("Unique species (n):", length(included_species), "\n")
+head(by_species_counts, 10)
+
+
+```
+
+
+```{r max-primary-paternity-models, echo=FALSE, results='hide', fig.show='hide'}
+
+#This model assumes maximum possible paternity for primary males
+
+#Full sample (all group types)
+if (file.exists("../output/model-objects/intercept_only_model.rds")) {
+  intercept_only_model <- readRDS("../output/model-objects/intercept_only_model.rds")
+} else {
+  intercept_only_model <- brm(
+    bf(proportion_primary_maximum_adj | weights(n_paternities^0.5) ~
+         (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+         (1 | species_nonphylo)),
+    family = Beta(),
+    data = data_clean,
+    data2 = list(phylo_matrix = phylo_matrix),
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(student_t(3, 0, 2.5), class = "sd"),
+      prior(student_t(3, 0, 2.5), class = "phi")
+    ),
+    chains = 4, iter = 10000, seed = 123,
+    control = list(adapt_delta = 0.99)
+  )
+  saveRDS(intercept_only_model, "../output/model-objects/intercept_only_model.rds")
+}
+
+  summary(intercept_only_model)
+  plot(intercept_only_model)
+  pp_check(intercept_only_model, type="hist")
+  pp_check(intercept_only_model, type="dens_overlay")
+
+  n_obs_iom <- nobs(intercept_only_model)
+  n_species_iom <- length(unique(
+    sub("^([^_]+_[^_]+).*", "\\1", intercept_only_model$data$genus_species_subspecies) #keep from counting subspecies
+  ))
+  n_pats_iom <- sum(intercept_only_model$data$n_paternities, na.rm = TRUE)
+
+  # Determine R2 
+  bayes_R2_iom <- as.data.frame(bayes_R2(intercept_only_model))
+  R2_est_iom <- round(bayes_R2_iom$Estimate[1], 2)
+  R2_ci_lo_iom <- round(bayes_R2_iom$Q2.5[1], 2)
+  R2_ci_hi_iom <- round(bayes_R2_iom$Q97.5[1], 2)
+
+  # Extract posterior draws
+  post_iom <- as_draws_df(intercept_only_model)
+  
+  # Extract and square standard deviations to get variances
+  var_phylo_iom <- post_iom$`sd_genus_species_subspecies__Intercept`^2
+  var_nonphylo_iom <- post_iom$`sd_species_nonphylo__Intercept`^2
+  
+  # Calculate lambda
+  lambda_iom <- var_phylo_iom / (var_phylo_iom + var_nonphylo_iom)
+  
+  # Summarize lambda
+  summary_lambda_iom <- quantile(lambda_iom, probs = c(0.025, 0.5, 0.975))
+  summary_lambda_iom
+
+```
+
+
+```{r min-primary-paternity-models, echo=FALSE, results='hide', fig.show='hide'}
+
+#This models assumes minimum possible paternity for primary males
+
+#Full sample (all group types)
+if (file.exists("../output/model-objects/intercept_only_model_min.rds")) {
+  intercept_only_model_min <- readRDS("../output/model-objects/intercept_only_model_min.rds")
+} else {
+  intercept_only_model_min <- brm(
+    bf(proportion_primary_minimum_adj | weights(n_paternities^0.5) ~
+         (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+         (1 | species_nonphylo)),
+    family = Beta(),
+    data = data_clean,
+    data2 = list(phylo_matrix = phylo_matrix),
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(student_t(3, 0, 2.5), class = "sd"),
+      prior(student_t(3, 0, 2.5), class = "phi")
+    ),
+    chains = 4, iter = 10000, seed = 123,
+    control = list(adapt_delta = 0.99)
+  )
+  saveRDS(intercept_only_model_min, "../output/model-objects/intercept_only_model_min.rds")
+}
+
+  summary(intercept_only_model_min)
+  plot(intercept_only_model_min)
+  pp_check(intercept_only_model_min, type="hist")
+  pp_check(intercept_only_model_min, type="dens_overlay")
+  
+  n_obs_iom_min <- nobs(intercept_only_model_min)
+  n_species_iom_min <- length(unique(
+    sub("^([^_]+_[^_]+).*", "\\1", intercept_only_model$data$genus_species_subspecies)
+  ))
+  n_pats_iom_min <- sum(intercept_only_model_min$data$n_paternities, na.rm = TRUE)
+  
+  # Determine R2 
+  bayes_R2_iom_min <- as.data.frame(bayes_R2(intercept_only_model_min))
+  R2_est_iom_min <- round(bayes_R2_iom_min$Estimate[1], 2)
+  R2_ci_lo_iom_min <- round(bayes_R2_iom_min$Q2.5[1], 2)
+  R2_ci_hi_iom_min <- round(bayes_R2_iom_min$Q97.5[1], 2)
+
+  # Extract posterior draws
+  post_iom_min <- as_draws_df(intercept_only_model_min)
+  
+  # Extract and square standard deviations to get variances
+  var_phylo_iom_min <- post_iom_min$`sd_genus_species_subspecies__Intercept`^2
+  var_nonphylo_iom_min <- post_iom_min$`sd_species_nonphylo__Intercept`^2
+  
+  # Calculate lambda
+  lambda_iom_min <- var_phylo_iom_min / (var_phylo_iom_min + var_nonphylo_iom_min)
+  
+  # Summarize lambda
+  summary_lambda_iom_min <- quantile(lambda_iom_min, probs = c(0.025, 0.5, 0.975))
+  summary_lambda_iom_min
+
+```
+Species-level random effects, which includes both phylogenetic relatedness and other species-level differences, explained roughly 35-40% of the variation in the proportion of paternities obtained by primary males. The posterior mean $R^2$ values of intercept-only models for all group types when all uncertain paternities were assigned to the primary male (`r format(R2_est_iom, nsmall=2)`, 95% CI: `r format(R2_ci_lo_iom, nsmall=2)` - `r format(R2_ci_hi_iom, nsmall=2)`, n=`r n_obs_iom` observations, `r analysis_species` species, and `r format(n_pats_iom, big.mark = ",")` total paternities) was very similar to the $R^2$ value when none of the uncertain paternities were assigned to the primary male (`r format(R2_est_iom_min, nsmall=2)`, 95% CI: `r format(R2_ci_lo_iom_min, nsmall=2)` - `r format(R2_ci_hi_iom_min, nsmall=2)`).  
+
+We next examined how this explained variation was apportioned between phylogenetic relatedness and other, non-phylogenetic species-level factors. If we assume that primary males sired all infants of uncertain paternity, a substantial proportion of the variation in primary male paternity share was explained by phylogenetic relatedness in the full sample ($\lambda$=`r format(round(summary_lambda_iom[2], 2), nsmall = 2)`, 95% CI: `r format(round(summary_lambda_iom[1], 2), nsmall = 2)` - `r format(round(summary_lambda_iom[3], 2), nsmall = 2)`). Assigning all uncertain paternities to other, non-primary males decreased $\lambda$ and increased 95% CIs ($\lambda$=`r format(round(summary_lambda_iom_min[2], 2), nsmall = 2)`, 95% CI: `r format(round(summary_lambda_iom_min[1], 2), nsmall = 2)` - `r format(round(summary_lambda_iom_min[3], 2), nsmall = 2)`). 
+
+**Question 2: How do male-male competition and monopolizability of reproductive opportunities influence primary males' paternity share?**
+
+```{r summary-stats-paternity-loss, echo=FALSE}
+
+#Calculate mean, SD aggregated across group types
+
+mean_val_primary <- mean(data_clean$proportion_primary_maximum_adj, na.rm = TRUE)
+sd_val_primary <- sd(data_clean$proportion_primary_maximum_adj, na.rm = TRUE)
+n_val_primary <- sum(!is.na(data_clean$proportion_primary_maximum_adj))
+n_pats_primary <- sum(data_clean$n_paternities[!is.na(data_clean$proportion_primary_maximum_adj)], na.rm = TRUE)
+n_species_primary <- n_distinct(data_clean$genus_species_subspecies[!is.na(data_clean$proportion_primary_maximum_adj)])
+
+mean_val_primary_min <- mean(data_clean$proportion_primary_minimum_adj, na.rm = TRUE)
+sd_val_primary_min <- sd(data_clean$proportion_primary_minimum_adj, na.rm = TRUE)
+n_val_primary_min <- sum(!is.na(data_clean$proportion_primary_minimum_adj))
+n_pats_primary_min <- sum(data_clean$n_paternities[!is.na(data_clean$proportion_primary_minimum_adj)], na.rm = TRUE)
+n_species_primary_min <- n_distinct(data_clean$genus_species_subspecies[!is.na(data_clean$proportion_primary_minimum_adj)])
+
+# Formatted versions for inline text
+mean_val_primary_s <- sprintf("%.0f", mean_val_primary * 100)
+sd_val_primary_s <- sprintf("%.0f", sd_val_primary * 100)
+mean_val_primary_min_s <- sprintf("%.0f", mean_val_primary_min * 100)
+sd_val_primary_min_s <- sprintf("%.0f", sd_val_primary_min * 100)
+
+```
+
+
+```{r table-paternity-loss, echo=FALSE, results='hide'}
+
+#This puts the summary-stats-paternity-loss info into table format. Not going to display until further below.
+
+# keep the NA filters identical everywhere
+valid_rows <- function(df) {
+  !is.na(df$proportion_primary_minimum_adj) & !is.na(df$proportion_primary_maximum_adj)
+}
+
+# 1) Main table by grp_composition 
+main_tbl <- data_clean %>%
+  group_by(grp_composition) %>%
+  summarise(
+    n         = sum(valid_rows(cur_data_all())),
+    n_species = n_distinct(species_10ktrees[valid_rows(cur_data_all())]),
+    n_pats    = sum(n_paternities[valid_rows(cur_data_all())], na.rm = TRUE),
+    min       = min(proportion_primary_minimum_adj, na.rm = TRUE),
+    max       = max(proportion_primary_maximum_adj, na.rm = TRUE),
+    mean_min  = mean(proportion_primary_minimum_adj, na.rm = TRUE),
+    sd_min    = sd(proportion_primary_minimum_adj, na.rm = TRUE),
+    mean_max  = mean(proportion_primary_maximum_adj, na.rm = TRUE),
+    sd_max    = sd(proportion_primary_maximum_adj, na.rm = TRUE),
+    .groups   = "drop"
+  ) %>%
+  mutate(
+  group_display = if_else(
+    grp_composition == "MF", 
+    "MF (All)", 
+    as.character(grp_composition)  # visible label
+  ),
+  is_sub = FALSE
+)
+
+# 2) MF sub-rows by pairbond_type (only if MF exists)
+mf_sub <- data_clean %>%
+  filter(grp_composition == "MF") %>%
+  mutate(pairbond_type = replace_na(pairbond_type, "Unknown")) %>%
+  group_by(grp_composition, pairbond_type) %>%
+  summarise(
+    n         = sum(valid_rows(cur_data_all())),
+    n_species = n_distinct(species_10ktrees[valid_rows(cur_data_all())]),
+    n_pats    = sum(n_paternities[valid_rows(cur_data_all())], na.rm = TRUE),
+    min       = min(proportion_primary_minimum_adj, na.rm = TRUE),
+    max       = max(proportion_primary_maximum_adj, na.rm = TRUE),
+    mean_min  = mean(proportion_primary_minimum_adj, na.rm = TRUE),
+    sd_min    = sd(proportion_primary_minimum_adj, na.rm = TRUE),
+    mean_max  = mean(proportion_primary_maximum_adj, na.rm = TRUE),
+    sd_max    = sd(proportion_primary_maximum_adj, na.rm = TRUE),
+    .groups   = "drop"
+  ) %>%
+  mutate(
+    # visible label for sub-rows; indent is styled in gt
+    group_display = paste0(pairbond_type),
+    is_sub = TRUE
+  )
+
+# 3) Bind, then order so sub-rows appear directly under MF; keeps original order of grp_comp
+order_vec <- main_tbl$grp_composition
+# place MF subrows immediately after the MF row
+combined <- bind_rows(
+  main_tbl,
+  mf_sub
+) %>%
+  mutate(
+    grp_order = match(grp_composition, order_vec),
+    # make sure MF subrows come right after MF (grp_order + small epsilon)
+    sub_bump  = ifelse(is_sub & grp_composition == "MF", 0.5, 0),
+    sort_key  = grp_order + sub_bump
+  ) %>%
+  arrange(sort_key, grp_composition, is_sub, group_display)
+
+# 4) Build gt table (indent MF sub-rows)
+# tbl_grptype number is pre-computed in setup chunk as tbl_grptype_num
+summary_table <- combined %>%
+  select(group_display, n, n_species, n_pats,
+         min, max, mean_min, sd_min, mean_max, sd_max, is_sub) %>%
+  gt(rowname_col = "group_display") %>%
+  tab_stubhead(label = "Group composition") %>%
+  tab_header(
+    title = paste0("Table ", tbl_grptype_num, ". Proportion of paternities obtained by primary males, by group type")
+  ) %>%
+  cols_label(
+    n               = "N obs",
+    n_species       = "N species",
+    n_pats          = "Total paternities",
+    min             = "Min",
+    max             = "Max",
+    mean_min        = "Mean (min est.)",
+    sd_min          = "SD (min est.)",
+    mean_max        = "Mean (max est.)",
+    sd_max          = "SD (max est.)"
+  ) %>%
+  # format numeric columns
+  fmt_number(
+    columns  = c(min, max, mean_min, sd_min, mean_max, sd_max),
+    decimals = 2
+  ) %>%
+  # left-align numeric columns
+  tab_style(
+    style = cell_text(align = "left"),
+    locations = cells_body(
+      columns = c(n, n_species, n_pats, min, max, mean_min, sd_min, mean_max, sd_max)
+    )
+  ) %>%
+  tab_style(
+    style     = cell_text(align = "left"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style     = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_stub(rows = !is_sub)
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_stubhead()
+  ) %>%
+  # indent the stub for sub-rows
+  tab_style(
+    style = cell_text(indent = px(18)),
+    locations = cells_stub(rows = is_sub)
+  ) %>%
+  # de-emphasize the sub-rows a little
+  tab_style(
+    style = cell_text(color = "gray30"),
+    locations = cells_body(rows = is_sub, columns = everything())
+  ) %>%
+  tab_options(
+    table.border.top.style = "none",
+    table.font.size        = px(13),
+    table.align            = "left"
+  ) %>%
+  cols_hide(columns = is_sub)
+
+```
+
+
+```{r paternity-loss-by-grp-type-model, echo=FALSE, results='hide'} 
+
+#This is basically a fancy ANOVA; only purpose is to determine whether there are meaningful differences in the paternity share of different group types. 
+
+if (file.exists("../output/model-objects/paternityloss_grptype_model.rds")) {
+  paternityloss_grptype_model <- readRDS("../output/model-objects/paternityloss_grptype_model.rds")
+} else {
+paternityloss_grptype_model <- brm(
+  bf(proportion_primary_maximum_adj | weights(n_paternities^0.5) ~
+       grp_composition_recode +
+       (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+       (1 | species_nonphylo)),
+  family = Beta(),
+  data = data_clean,
+  data2 = list(phylo_matrix = phylo_matrix),
+  prior = c(
+    prior(normal(0, 1), class = "Intercept"),
+    prior(normal(0, 1), class = "b"),
+    prior(student_t(3, 0, 2.5), class = "sd"),
+    prior(student_t(3, 0, 2.5), class = "phi")
+  ),
+  chains = 4, iter = 10000, seed = 123,
+  control = list(adapt_delta = 0.99)
+)
+  saveRDS(paternityloss_grptype_model, "../output/model-objects/paternityloss_grptype_model.rds")
+}
+
+summary(paternityloss_grptype_model)
+#plot(paternityloss_grptype_model)
+
+###Convert to proportion scale for reporting purposes###
+
+# 1. sanity check: levels exist and MM is reference (so no b_*MM column)
+stopifnot(all(c("MM","MF","MFF") %in% levels(data_clean$grp_composition_recode)))
+dr <- as_draws_df(paternityloss_grptype_model)
+
+# 2. linear predictors (logit) from fixed effects
+eta_MM  <- dr$b_Intercept
+eta_MF  <- eta_MM + dr$`b_grp_composition_recodeMF`
+eta_MFF <- eta_MM + dr$`b_grp_composition_recodeMFF`
+
+# 3. map to response scale (proportions)
+mu_MM  <- plogis(eta_MM)
+mu_MF  <- plogis(eta_MF)
+mu_MFF <- plogis(eta_MFF)
+
+# helper that returns a numeric named vector
+summ_vec <- function(x) c(mean = mean(x), lo = unname(quantile(x, 0.025)),
+                          hi = unname(quantile(x, 0.975)))
+
+# group means (response scale)
+g_MM  <- summ_vec(mu_MM)
+g_MF  <- summ_vec(mu_MF)
+g_MFF <- summ_vec(mu_MFF)
+
+# pairwise differences (absolute, response scale) — choose direction explicitly
+diff_MM_MF_prop  <- mu_MM  - mu_MF
+diff_MM_MFF_prop <- mu_MM  - mu_MFF
+diff_MF_MFF_prop <- mu_MF  - mu_MFF
+
+d_MM_MF_prop  <- summ_vec(diff_MM_MF_prop)
+d_MM_MFF_prop <- summ_vec(diff_MM_MFF_prop)
+d_MF_MFF_prop <- summ_vec(diff_MF_MFF_prop)
+
+# 4. hard sanity checks (these will error if something goes off)
+# If MFF has higher mean than MM on the logit scale, this should be strictly < 0:
+stopifnot(d_MM_MFF_prop["hi"] < 0)
+
+# 5. create fresh names for inline (to avoid collisions with old vars)
+MM_mean_prop     <- g_MM["mean"];    MM_lo_prop <- g_MM["lo"];    MM_hi_prop <- g_MM["hi"]
+MF_mean_prop     <- g_MF["mean"];    MF_lo_prop <- g_MF["lo"];    MF_hi_prop <- g_MF["hi"]
+MFF_mean_prop    <- g_MFF["mean"];   MFF_lo_prop <- g_MFF["lo"];  MFF_hi_prop <- g_MFF["hi"]
+
+# Save Analysis 1 MM mean for use in Question 3 text (before it is overwritten by Analysis 2)
+MM_mean_prop_A1 <- g_MM["mean"]
+MM_lo_prop_A1   <- g_MM["lo"]
+MM_hi_prop_A1   <- g_MM["hi"]
+MM_mean_pct_A1_s <- sprintf("%.0f", MM_mean_prop_A1 * 100)
+MM_lo_pct_A1_s   <- sprintf("%.0f", MM_lo_prop_A1 * 100)
+MM_hi_pct_A1_s   <- sprintf("%.0f", MM_hi_prop_A1 * 100)
+
+MM_MF_diff_prop  <- d_MM_MF_prop["mean"];  MM_MF_lo_prop  <- d_MM_MF_prop["lo"];  MM_MF_hi_prop  <- d_MM_MF_prop["hi"]
+MM_MFF_diff_prop <- d_MM_MFF_prop["mean"]; MM_MFF_lo_prop <- d_MM_MFF_prop["lo"]; MM_MFF_hi_prop <- d_MM_MFF_prop["hi"]
+MF_MFF_diff_prop <- d_MF_MFF_prop["mean"]; MF_MFF_lo_prop <- d_MF_MFF_prop["lo"]; MF_MFF_hi_prop <- d_MF_MFF_prop["hi"]
+
+# 6. (optional) formatted strings with new names
+fmt2 <- function(z) sprintf('%.2f', z)
+MM_mean_prop_s     <- fmt2(MM_mean_prop);     MM_lo_prop_s  <- fmt2(MM_lo_prop);   MM_hi_prop_s  <- fmt2(MM_hi_prop)
+MF_mean_prop_s     <- fmt2(MF_mean_prop);     MF_lo_prop_s  <- fmt2(MF_lo_prop);   MF_hi_prop_s  <- fmt2(MF_hi_prop)
+MFF_mean_prop_s    <- fmt2(MFF_mean_prop);    MFF_lo_prop_s <- fmt2(MFF_lo_prop);  MFF_hi_prop_s <- fmt2(MFF_hi_prop)
+
+MM_MF_diff_prop_s  <- fmt2(MM_MF_diff_prop);  MM_MF_lo_prop_s  <- fmt2(MM_MF_lo_prop);  MM_MF_hi_prop_s  <- fmt2(MM_MF_hi_prop)
+MM_MFF_diff_prop_s <- fmt2(MM_MFF_diff_prop); MM_MFF_lo_prop_s <- fmt2(MM_MFF_lo_prop); MM_MFF_hi_prop_s <- fmt2(MM_MFF_hi_prop)
+MF_MFF_diff_prop_s <- fmt2(MF_MFF_diff_prop); MF_MFF_lo_prop_s <- fmt2(MF_MFF_lo_prop); MF_MFF_hi_prop_s <- fmt2(MF_MFF_hi_prop)
+
+```
+
+```{r data-consistency-check-question-2, echo=FALSE, results='hide', eval=FALSE}
+
+#Verify that the observations being used in the table and model are all the same
+
+#1--Identify the rows the table uses
+table_row_ids <- data_clean %>%
+  filter(
+    !is.na(proportion_primary_minimum_adj) &
+    !is.na(proportion_primary_maximum_adj)
+  ) %>%
+  pull(row_id)
+
+#2--Identify the rows the model uses
+model_row_ids <- data_clean %>%
+  filter(
+    !is.na(proportion_primary_maximum_adj),               # response
+    !is.na(n_paternities),                                 # weights
+    !is.na(grp_composition_recode),                        # fixed effect
+    !is.na(genus_species_subspecies),                      # phylo RE
+    !is.na(species_nonphylo)                               # non‐phylo RE
+  ) %>%
+  pull(row_id)
+
+#3--Which rows are in the table but not in the model?
+rows_only_in_table <- setdiff(table_row_ids, model_row_ids)
+
+#4--Which rows are in the model but not in the table?
+rows_only_in_model <- setdiff(model_row_ids, table_row_ids)
+
+#If both rows_only objects are empty, observations match
+
+```
+
+__Analysis 1: Description of paternity share-group type relationship__
+
+We first evaluated the relationship between group composition and paternity share by itself (Table `r tbl_grptype_num`). On average, in the raw data primary males obtained `r mean_val_primary_s`% (SD = `r sd_val_primary_s`%) of paternities across all group types; these values were very similar if all uncertain paternities were assigned to other, non-primary males (mean = `r mean_val_primary_min_s`%, SD = `r sd_val_primary_min_s`%). Primary males in single-male/multi-female groups had the highest average paternity shares (posterior mean prediction=`r MFF_mean_prop_s`, 95% CI: `r MFF_lo_prop_s` - `r MFF_hi_prop_s`) and multi-male/multi-female groups the lowest (posterior mean prediction=`r MM_mean_prop_s`, 95% CI: `r MM_lo_prop_s` - `r MM_hi_prop_s`), although there was considerable variation within each category (Table `r tbl_grptype_num` and Figure `r fig_patloss`). 
+
+Primary males in single-male/multi-female groups had credibly higher paternity share than males in multi-male groups (95% CI: `r MM_MFF_lo_prop_s` - `r MM_MFF_hi_prop_s`). The evidence for a difference between pair-living groups and multi-male groups was more modest, with a 95% CI that barely crossed zero (`r MM_MF_lo_prop_s` - `r MM_MF_hi_prop_s`). However, visual inspection indicated that the unexpectedly low paternity share values for pair-living animals were specifically driven by species where pairs are dispersed (orange dots in Figure `r fig_patloss`) rather than cohesive (green dots in Figure `r fig_patloss`; raw data means for these two subgroups are represented with diamonds in the figure). 
+
+```{r summary_table, echo=FALSE}
+
+summary_table
+
+```
+
+```{r fig3-paternity-loss-model-plot, echo=FALSE, results='hide', fig.cap=fig_patloss_cap}
+
+# Get conditional effects from the model
+pl_ce <- conditional_effects(paternityloss_grptype_model, "grp_composition_recode")
+pl_ce_data <- pl_ce$grp_composition_recode
+
+# Plot conditional effects with raw data, colored by MF pairbond type
+
+# 1. Create a new column to classify for color
+data_clean <- data_clean %>%
+  mutate(plot_color = case_when(
+    grp_composition_recode == "MF" & pairbond_type == "cohesive" ~ "Cohesive MF",
+    grp_composition_recode == "MF" & pairbond_type == "dispersed" ~ "Dispersed MF",
+    grp_composition == "MMF" ~ "MMF",
+    TRUE ~ "Other"
+  ))
+
+# 2. Compute raw means for the two MF subtypes (for diamond + label)
+mf_means <- data_clean %>%
+  filter(grp_composition_recode == "MF", !is.na(pairbond_type)) %>%
+  group_by(grp_composition_recode, plot_color) %>%
+  summarise(
+    mean_val = mean(proportion_primary_maximum_adj, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(label = if_else(plot_color == "Cohesive MF", "cohesive", "dispersed"))
+
+# 3. Define custom colors
+mf_colors <- c(
+  "Cohesive MF" = "#1b9e77",   # green
+  "Dispersed MF" = "#d95f02",  # orange
+  "MMF" = "#2196F3",           # blue
+  "Other" = "gray60"
+)
+
+# 4. Compute mean position for MMF label
+mmf_means <- data_clean %>%
+  filter(plot_color == "MMF") %>%
+  summarise(
+    grp_composition_recode = first(grp_composition_recode),
+    mean_val = mean(proportion_primary_maximum_adj, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 4. Plot
+ggplot(pl_ce_data, aes(x = effect1__, y = estimate__)) +
+  # Raw data points
+  geom_jitter(data = data_clean,
+              aes(x = grp_composition_recode, y = proportion_primary_maximum_adj, color = plot_color),
+              width = 0.1, height = 0, alpha = 0.5, size = 1.5) +
+
+  # Posterior means and CIs
+  geom_point(size = 3, color = "black") +
+  geom_errorbar(aes(ymin = lower__, ymax = upper__), width = 0.2, linewidth = 0.8) +
+
+  # Colored diamonds for MF subtypes
+  stat_summary(
+    data = data_clean %>% filter(plot_color %in% c("Cohesive MF", "Dispersed MF")),
+    aes(x = grp_composition_recode, y = proportion_primary_maximum_adj, color = plot_color),
+    fun = mean,
+    geom = "point",
+    shape = 18,  # diamond
+    size = 4
+  ) +
+
+  # Labels for each MF subtype mean (offset for visibility)
+geom_text(
+  data = mf_means,
+  aes(x = grp_composition_recode, y = mean_val, label = label, color = plot_color),
+  size = 4,
+  fontface = "italic",
+  hjust = 0,
+  nudge_x = 0.15,
+  nudge_y = -0.02
+) +
+
+  # Label for MMF observations
+geom_text(
+  data = mmf_means,
+  aes(x = grp_composition_recode, y = mean_val, label = "multi-male/\nsingle-female"),
+  color = "#2196F3",
+  size = 4,
+  fontface = "italic",
+  hjust = 0,
+  nudge_x = 0.12,
+  nudge_y = -0.02
+) +
+
+  scale_color_manual(values = mf_colors) +
+  guides(color = "none") +  # remove legend
+
+  labs(
+    x = "Group composition",
+    y = "Estimated primary male paternity share",
+    title = "Predicted paternity share by group type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(margin = margin(r = 10)),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+
+
+
+```
+
+```{r competition-monopolizability-model, echo=FALSE, results='hide', fig.show='hide'}
+
+if (file.exists("../output/model-objects/competition_monopolizability_model.rds")) {
+  competition_monopolizability_model <- readRDS("../output/model-objects/competition_monopolizability_model.rds")
+} else {
+  competition_monopolizability_model <- brm(
+    formula = bf(
+      proportion_primary_maximum_adj | weights(n_paternities^0.5) ~ 
+        n + m + m2 + n:m +
+        (1 | gr(genus_species_subspecies, cov = phylo_matrix)) + 
+        (1 | species_nonphylo)
+    ),
+    data = data_clean,
+    family = Beta(link = "logit"),
+    data2 = list(phylo_matrix = phylo_matrix),
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(normal(0, 1), class = "b"),
+      prior(student_t(3, 0, 2.5), class = "sd"),
+      prior(student_t(3, 0, 2.5), class = "phi")
+    ),
+    control = list(adapt_delta = 0.99),
+    chains = 4, cores = 4, iter = 10000, seed = 123
+  )
+  saveRDS(competition_monopolizability_model, "../output/model-objects/competition_monopolizability_model.rds")
+}
+
+summary(competition_monopolizability_model)
+```
+
+```{r extract-means-CIs-competition-monopolizability-model, echo=FALSE, results='hide', fig.show='hide'}
+
+#####Extract means and CIs for competition var; how big is the diff between multi and single male groups?######
+
+# Extract posterior draws
+dr <- as_draws_df(competition_monopolizability_model)
+
+# Compute linear predictors for SM and MM group type, holding m/m^2 constant
+# Choose mean m (seasonality)
+m_val <- mean(data_clean$m, na.rm = TRUE)
+m2_val <- m_val^2
+
+# Group 1: MM (n = 0) — reference group
+eta_MM <- dr$b_Intercept + 
+          dr$b_m   * m_val + 
+          dr$b_m2  * m2_val
+
+# Group 2: SM (n = 1)
+eta_SM <- dr$b_Intercept + 
+          dr$b_n   + 
+          dr$b_m   * m_val + 
+          dr$b_m2  * m2_val + 
+          dr$`b_n:m` * m_val
+
+# Transform to response scale (inverse logit)
+mu_MM <- plogis(eta_MM)
+mu_SM <- plogis(eta_SM)
+
+# Summarize posterior for each group (reusing summ_vec from earlier)
+g_MM <- summ_vec(mu_MM)
+g_SM <- summ_vec(mu_SM)
+
+# Format for use in text (reusing fmt2 from earlier)
+
+MM_mean_prop_s <- fmt2(g_MM["mean"])
+MM_lo_prop_s   <- fmt2(g_MM["lo"])
+MM_hi_prop_s   <- fmt2(g_MM["hi"])
+
+SM_mean_prop_s <- fmt2(g_SM["mean"])
+SM_lo_prop_s   <- fmt2(g_SM["lo"])
+SM_hi_prop_s   <- fmt2(g_SM["hi"])
+
+# Calculate difference in group types across posterior draws
+diff_SM_MM <- mu_SM - mu_MM
+
+#Summary of the group differnce (mean/CI)
+d_SM_MM <- summ_vec(diff_SM_MM)
+d_SM_MM
+
+#Format for use in text
+SM_MM_diff_prop_s  <- fmt2(d_SM_MM["mean"])
+SM_MM_lo_prop_s    <- fmt2(d_SM_MM["lo"])
+SM_MM_hi_prop_s    <- fmt2(d_SM_MM["hi"])
+
+# Sample size for this model (smaller than Analysis 1 b/c not all species have seasonality data)
+n_obs_cm <- nobs(competition_monopolizability_model)
+n_species_cm <- length(unique(
+  sub("^([^_]+_[^_]+).*", "\\1", competition_monopolizability_model$data$genus_species_subspecies)
+))
+n_pats_cm <- sum(competition_monopolizability_model$data$n_paternities, na.rm = TRUE)
+
+n_obs_cm_fmt <- format(n_obs_cm, big.mark = ",")
+n_species_cm_fmt <- format(n_species_cm, big.mark = ",")
+n_pats_cm_fmt <- format(n_pats_cm, big.mark = ",")
+
+```
+
+```{r plot-competition-monopolizability-model, echo=FALSE, results='hide', fig.show='hide'}
+
+#################Plot competition monopolizability model#############
+
+# Choose m levels 
+m_vals <- quantile(data_clean$m, probs = c(0.1, 0.5, 0.9), na.rm = TRUE)
+
+newdat_B <- expand.grid(
+  n = c(0, 1),
+  m = as.numeric(m_vals)
+) %>%
+  mutate(
+    m2    = m^2,
+    n_lab = factor(n, levels = c(0,1), labels = c("MM", "SM")),
+    m_lab = paste0("m = ", round(m, 2))
+  )
+
+# Get summaries and rename to mean/lo/hi
+pred_B <- fitted(
+  competition_monopolizability_model,
+  newdata    = newdat_B,
+  re_formula = NA,
+  summary    = TRUE,
+  scale      = "response"
+) %>%
+  as_tibble() %>%
+  transmute(mean = Estimate, lo = `Q2.5`, hi = `Q97.5`)
+
+summ_B <- bind_cols(newdat_B, pred_B)
+
+# Sanity check (should include mean, lo, hi)
+# print(names(summ_B))
+
+# Order legend by increasing m
+levels_m <- paste0("m = ", round(sort(unique(summ_B$m)), 2))
+summ_B <- summ_B %>%
+  mutate(m_lab = factor(m_lab, levels = levels_m))
+
+# Color-blind friendly palette for figure
+okabe_ito <- c("#56B4E9", "#009E73", "#E69F00", "#0072B2",
+               "#D55E00", "#CC79A7", "#F0E442", "#000000")
+
+pd <- position_dodge(width = 0.35)
+brks <- levels(summ_B$m_lab)
+
+cm_plot <- ggplot(summ_B, aes(x = n_lab, y = mean, ymin = lo, ymax = hi, color = m_lab)) +
+  geom_point(position = pd, size = 2.8, shape = 16) +   
+  geom_errorbar(position = pd, width = 0.12, linewidth = 0.6) +
+  scale_color_manual(values = okabe_ito, name = "Monopolizability (m)") +
+  labs(x = "Group composition", y = "Estimated primary male paternity share") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right") +
+  scale_color_manual(
+    breaks = brks,
+    labels = c("most seasonal", "moderately seasonal", "least seasonal"),
+    values = okabe_ito[seq_along(brks)],  
+    name   = "Seasonality")
+
+```
+
+```{r derivatives-competition-monopolizability-model, echo=FALSE, results='hide', fig.show='hide'}
+
+######Extract derivatives; as monopolizability increases, how fast does paternity share change?
+
+# Partial derivative of logit(mu) w/r/t monopolizability at the mean
+m_deriv <- mean(data_clean$m, na.rm = TRUE)
+
+# Logit-scale derivative: d logit(mu) / dm = b_m + 2*b_m2*m + b_n:m * n
+dlogit_MM <- dr$b_m + 2 * dr$b_m2 * m_deriv                    # n = 0
+dlogit_SM <- dr$b_m + 2 * dr$b_m2 * m_deriv + dr$`b_n:m`       # n = 1
+
+# Response-scale derivative via chain rule: d mu / dm = dlogit/dm * mu * (1 - mu)
+# Reuse eta and mu from earlier chunk (eta_MM, eta_SM, mu_MM, mu_SM)
+dresp_MM <- dlogit_MM * mu_MM * (1 - mu_MM)
+dresp_SM <- dlogit_SM * mu_SM * (1 - mu_SM)
+
+# Summarize
+summ_vec(dlogit_MM)
+summ_vec(dlogit_SM)
+summ_vec(dresp_MM)
+summ_vec(dresp_SM)
+
+# Format for text
+dresp_MM_mean <- fmt2(summ_vec(dresp_MM)["mean"])
+dresp_MM_lo   <- fmt2(summ_vec(dresp_MM)["lo"])
+dresp_MM_hi   <- fmt2(summ_vec(dresp_MM)["hi"])
+
+dresp_SM_mean <- fmt2(summ_vec(dresp_SM)["mean"])
+dresp_SM_lo   <- fmt2(summ_vec(dresp_SM)["lo"])
+dresp_SM_hi   <- fmt2(summ_vec(dresp_SM)["hi"])
+
+```
+
+__Analysis 2: Evaluation of combined effects of competitors and seasonality__
+
+We next examined the combined effects of the presence or absence of in-group competitors (i.e., multi-male versus single-male groups) and seasonality (least, moderately, and most seasonal). Because seasonality data were not available for all species, this analysis was based on a slightly smaller sample than Analysis 1 (`r n_obs_cm_fmt` observations, `r n_species_cm_fmt` species, and `r n_pats_cm_fmt` total paternities). Seasonality had little effect on primary male paternity share. In both single-male and multi-male groups species that were seasonal breeders, moderately seasonal, and which had little to no seasonality all had roughly equal paternity share, with extensive overlap in 95% CIs (Figure `r fig_seasonality`). Consistent with this overall conclusion, the estimated change in paternity share per unit increase in monopolizability was near zero in both multi-male groups (posterior mean = `r dresp_MM_mean`, 95% CI: `r dresp_MM_lo` - `r dresp_MM_hi`) and in single-male groups (posterior mean = `r dresp_SM_mean`, 95% CI: `r dresp_SM_lo` - `r dresp_SM_hi`). The results were qualitatively very similar when pair-living groups, where mating opportunities should be highly monopolizable regardless of seasonality, were excluded. 
+
+The inclusion of seasonality in the model slightly lowered the expected paternity share for primary males (Figure `r fig_seasonality`). Here, for multi-male groups the posterior mean was `r MM_mean_prop_s`, while for single-male groups it was `r SM_mean_prop_s`. The 95% CI of the difference between the two did not include zero (95% CI: `r SM_MM_lo_prop_s` - `r SM_MM_hi_prop_s`), indicating again that there is credible evidence that primary males in multi-male groups have lower paternity share than males in single-male groups. 
+
+```{r competition-monopolizability-plot, echo=FALSE, fig.cap=fig_seasonality_cap}
+
+cm_plot
+
+```
+
+**Question 3: When primary males in multimale groups lose paternity, who are they losing it to?**
+
+```{r egp-proportions-nums, echo=FALSE, results='hide'}
+
+# Raw summary numbers — need this in order to fill in inline text numbers plus table
+
+# A single “raw” summary with full precision
+summary_data_egps_raw <- data_clean %>%
+  filter(grp_composition_recode == "MM") %>%
+  filter(
+    !is.na(proportion_egp_minimum_adj),
+    !is.na(proportion_egp_maximum_adj)
+  ) %>%
+  summarise(
+    n_obs     = n(),                                            # obs
+    n_pats    = sum(n_paternities, na.rm = TRUE),               # total paternities
+    n_species = n_distinct(species_10ktrees),           # species
+    min       = min(proportion_egp_minimum_adj, na.rm = TRUE), # raw min prop
+    max       = max(proportion_egp_maximum_adj, na.rm = TRUE), # raw max prop
+    mean_min  = mean(proportion_egp_minimum_adj, na.rm = TRUE), # raw mean(min)
+    sd_min    = sd(proportion_egp_minimum_adj, na.rm = TRUE),   # raw sd(min)
+    mean_max  = mean(proportion_egp_maximum_adj, na.rm = TRUE), # raw mean(max)
+    sd_max    = sd(proportion_egp_maximum_adj, na.rm = TRUE)    # raw sd(max)
+  )
+
+# Reformatting numbers for use in text
+mean_min_str <- sprintf("%.0f", summary_data_egps_raw$mean_min * 100)
+sd_min_str   <- sprintf("%.0f", summary_data_egps_raw$sd_min   * 100)
+mean_max_str <- sprintf("%.0f", summary_data_egps_raw$mean_max * 100)
+sd_max_str   <- sprintf("%.0f", summary_data_egps_raw$sd_max   * 100)
+obs_str      <- format(summary_data_egps_raw$n_obs,     big.mark = ",")
+species_str  <- format(summary_data_egps_raw$n_species, big.mark = ",")
+pats_str     <- format(summary_data_egps_raw$n_pats,    big.mark = ",")
+
+# EGP share of "lost" paternities (using Analysis 1 MM posterior mean)
+egp_loss_share_min <- summary_data_egps_raw$mean_min / (1 - MM_mean_prop_A1)
+egp_loss_share_max <- summary_data_egps_raw$mean_max / (1 - MM_mean_prop_A1)
+egp_loss_share_min_str <- sprintf("%.0f", egp_loss_share_min * 100)
+egp_loss_share_max_str <- sprintf("%.0f", egp_loss_share_max * 100)
+
+```
+
+
+
+
+
+```{r troubleshooting-n-differences, echo=FALSE, results='hide', eval=FALSE}
+
+#Figure out why I get more EGP values than primary male values for MMFF groups.
+
+# Count MMF and MMFF rows with different missingness profiles
+data_clean %>%
+  filter(grp_composition_recode == "MM") %>%
+  mutate(
+    has_primary = !is.na(proportion_primary_minimum_adj) & !is.na(proportion_primary_maximum_adj),
+    has_egp = !is.na(proportion_egp_minimum_adj) & !is.na(proportion_egp_maximum_adj)
+  ) %>%
+  count(grp_composition, has_primary, has_egp)
+
+# Identify rows where EGP data exist but primary paternity data do not
+egp_only_cases <- data_clean %>%
+  filter(
+    !is.na(proportion_egp_minimum_adj) & !is.na(proportion_egp_maximum_adj) & 
+    (is.na(proportion_primary_minimum_adj) | is.na(proportion_primary_maximum_adj))
+  )
+
+# Select relevant identifying information
+egp_only_cases_summary <- egp_only_cases %>%
+  select(genus_species_subspecies, reference, grp_composition) %>%
+  distinct()
+
+egp_only_cases_summary
+
+```
+
+```{r paternityloss-source-model, echo=FALSE, results='hide', fig.show='hide'}
+
+loss_source_data_mm <- data_subset_mm %>%
+  mutate(
+    # Calculate in-group losses and reformat negatives
+    n_igp        = as.integer(n_paternities - n_alphaprimary - n_egp),
+    n_igp        = pmax(n_igp, 0L),
+    # Total losses
+    total_losses = n_egp + n_igp,
+    # Prepare weights
+    model_weights = n_paternities^0.5
+  ) %>%
+  filter(
+    # Keep zero-loss cases (total_losses >= 0)
+    !is.na(n_egp),
+    !is.na(n_igp),
+    !is.na(n_paternities),
+    !is.na(genus_species_subspecies),
+    !is.na(species_nonphylo)
+  )
+
+
+if (file.exists("../output/model-objects/loss_source_model_mm.rds")) {
+  loss_source_model_mm <- readRDS("../output/model-objects/loss_source_model_mm.rds")
+} else {
+  loss_source_model_mm <- brm(
+  bf(n_egp | trials(total_losses) ~
+       (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+       (1 | species_nonphylo)),
+  family = binomial(),
+  data = loss_source_data_mm,
+  data2 = list(phylo_matrix = phylo_matrix),
+  prior = c(
+    prior(normal(0, 1), class = "Intercept"),
+    prior(student_t(3, 0, 2.5), class = "sd")
+  ),
+  sample_prior = "no",
+  chains = 4, iter = 10000, seed = 123,
+  control = list(adapt_delta = 0.99)
+)
+  saveRDS(loss_source_model_mm, "../output/model-objects/loss_source_model_mm.rds")
+}
+
+summary(loss_source_model_mm)
+
+# Use posterior_linpred (not posterior_epred) to get the probability (pi)
+# on the response scale. posterior_epred returns expected counts for binomial
+# models (n * pi), which is not what we want here.
+egp_loss_summary <- posterior_linpred(loss_source_model_mm, transform = TRUE, re_formula = NA) %>%
+  as.data.frame() %>%
+  summarise(
+    mean = round(mean(V1) * 100, 0),
+    ci_lower = round(quantile(V1, 0.025) * 100, 0),
+    ci_upper = round(quantile(V1, 0.975) * 100, 0)
+  )
+
+egp_loss_summary
+
+igp_loss_summary <- posterior_linpred(loss_source_model_mm, transform = TRUE, re_formula = NA) %>%
+  as.data.frame() %>%
+  summarise(
+    mean = round(mean(1 - V1) * 100, 0),
+    ci_lower = round(quantile(1 - V1, 0.025) * 100, 0),
+    ci_upper = round(quantile(1 - V1, 0.975) * 100, 0)
+  )
+
+igp_loss_summary
+
+n_obs_loss_source <- nrow(loss_source_model_mm$data)
+n_species_loss_source <- length(unique(
+  sub("^([^_]+_[^_]+).*", "\\1", loss_source_model_mm$data$genus_species_subspecies)
+))
+n_pats_loss_source <- sum(loss_source_data_mm$n_paternities, na.rm = TRUE)
+
+n_obs_loss_source_fmt <- format(n_obs_loss_source, big.mark = ",")
+n_species_loss_source_fmt <- format(n_species_loss_source, big.mark = ",")
+n_pats_loss_source_fmt <- format(n_pats_loss_source, big.mark = ",")
+
+# Derived quantities for inline text: overall EGP rate based on Analysis 1 CI and model EGP share
+loss_hi_A1 <- 1 - MM_lo_prop_A1   # max share lost (from low end of CI)
+loss_lo_A1 <- 1 - MM_hi_prop_A1   # min share lost (from high end of CI)
+loss_lo_pct_s <- sprintf("%.0f", loss_lo_A1 * 100)
+loss_hi_pct_s <- sprintf("%.0f", loss_hi_A1 * 100)
+
+egp_frac <- egp_loss_summary$mean / 100   # model-estimated EGP proportion of losses
+overall_egp_lo <- egp_frac * loss_lo_A1
+overall_egp_hi <- egp_frac * loss_hi_A1
+overall_egp_lo_s <- sprintf("%.0f", overall_egp_lo * 100)
+overall_egp_hi_s <- sprintf("%.0f", overall_egp_hi * 100)
+
+pp_check(loss_source_model_mm, type = "hist")
+pp_check(loss_source_model_mm, type = "dens_overlay")
+
+```
+
+```{r loss-source-dropped-obs-diagnostic, echo=FALSE, results='hide', eval=FALSE}
+
+#Determine why a bunch of obs drop from the model
+
+#1 Rows used in the raw summary
+raw_ids <- data_clean %>%
+  filter(
+    grp_composition_recode == "MM",
+    !is.na(proportion_egp_minimum_adj),
+    !is.na(proportion_egp_maximum_adj)
+  ) %>%
+  pull(row_id)
+
+#2 Rows used in the data for model 
+model_ids <- loss_source_data_mm$row_id
+
+#3 Which rows are in the raw summary but not in the model?
+dropped_ids <- setdiff(raw_ids, model_ids)
+
+#4 Look at the dropped rows
+dropped_obs <- data_clean %>%
+  filter(row_id %in% dropped_ids) %>%
+  select(
+    row_id,
+    grp_composition_recode,
+    proportion_egp_minimum_adj,
+    proportion_egp_maximum_adj,
+    n_paternities,
+    n_egp,
+    n_alphaprimary,
+    genus_species_subspecies,
+    species_nonphylo
+  )
+
+#5 Print them all so I can see exactly why each was dropped // These are rows that do not have n_primaryalpha, which is necessary to calculate losses.
+
+#print(dropped_obs, n = Inf)
+
+```
+
+In the raw data, a minimum of `r mean_min_str`% (SD = `r sd_min_str`%) of sirings in multi-male groups were EGPs; this rose to `r mean_max_str`% (SD = `r sd_max_str`%) if all uncertain paternities were assigned to extra‐group males (n=`r obs_str` observations, `r species_str` species, and `r pats_str` total paternities). If primary males in multi-male groups sire approximately `r MM_mean_pct_A1_s`% of infants (i.e., the posterior mean prediction from Question 2, Analysis 1 above), then about `r sprintf("%.0f", (1 - MM_mean_prop_A1) * 100)`% of infants are sired by other males. Given a raw, overall EGP rate of `r mean_min_str`–`r mean_max_str`%, this would mean that `r egp_loss_share_min_str`–`r egp_loss_share_max_str`% of the paternities that primary males lose are attributable to extra-group males, with the remainder lost to group mates.^[`r mean_min_str`/`r sprintf("%.0f", (1 - MM_mean_prop_A1) * 100)` = `r egp_loss_share_min_str`%; `r mean_max_str`/`r sprintf("%.0f", (1 - MM_mean_prop_A1) * 100)` = `r egp_loss_share_max_str`%.]
+
+While our statistical models generally tell a similar story, they suggest that losses to extra-group males may be slightly higher than what we observe in the raw data. For the subset of data where all relevant information was available (`r n_obs_loss_source_fmt` observations, `r n_species_loss_source_fmt` species, and `r n_pats_loss_source_fmt` paternities), an estimated `r egp_loss_summary$mean`% of primary males' lost paternities were EGPs (95% CI: `r egp_loss_summary$ci_lower` - `r egp_loss_summary$ci_upper`%). The other `r igp_loss_summary$mean`% of lost paternities went to in-group males (95% CI: `r igp_loss_summary$ci_lower` - `r igp_loss_summary$ci_upper`%). 
+
+Since the 95% CI for primary male paternity share in multimale groups is `r MM_lo_pct_A1_s`-`r MM_hi_pct_A1_s`% (see Figure `r fig_patloss`), this means that somewhere between `r loss_lo_pct_s` and `r loss_hi_pct_s`% of infants are sired by other males. If `r egp_loss_summary$mean`% of the low end and high end of these paternity share estimates are EGPs, this would translate to an overall EGP rate of ~`r overall_egp_lo_s`-`r overall_egp_hi_s`%.^[`r sprintf("%.2f", egp_frac)` × `r sprintf("%.2f", loss_lo_A1)` = `r sprintf("%.2f", overall_egp_lo)`; `r sprintf("%.2f", egp_frac)` × `r sprintf("%.2f", loss_hi_A1)` = `r sprintf("%.2f", overall_egp_hi)`.]    
+
+## Discussion
+
+One of the primary goals of this project was to compile all available genetic paternity data for wild nonhuman primates and produce a single publicly accessible repository for them. The database that we have created contains information about `r n_species_total` species from `r n_genera` genera representing `r n_families` of 14 primate families represented in 10kTrees. The three families that are not included (*Galagidae*, *Lorisidae*, and *Daubentonidae*) are all largely solitary Strepsirrhines. Although these numbers are gratifyingly large, we are missing information from a substantial number of species, while some families, particularly the *Cercopithecidae* and *Hominidae*, are over-represented in the dataset. 
+
+Phylogeny has a detectable but moderate effect on the distribution of paternity in primate groups. Species-level random effects, which do not differentiate between phylogenetic and non-phylogenetic species differences, explained roughly 35–40% of the total variation in primary males’ paternity share. Of that inter-species variation, our models indicate that between `r round(summary_lambda_iom_min[2] * 100)`% and `r round(summary_lambda_iom[2] * 100)`% is attributable to phylogenetic relationships, though with wide credible intervals. In absolute terms, this means phylogeny accounts for a relatively modest share of total variation in paternity outcomes. Instead, most of the variation came from observation-level differences within and between species that are not captured by the phylogenetic or species-level random effects. @KamilarCooper2013 found a strong phylogenetic signal associated with morphological traits related to the intensity of intrasexual selection on males, including sexual dimorphism in body mass ($\lambda$ = 0.94), canine size ($\lambda$ = 0.82), and testes size ($\lambda$ = 0.89). They also reported a Pagel’s $\lambda$ of 0.60 for the number of males in groups. Because our $\lambda$ is computed differently than Pagel’s $\lambda$ (i.e., on the random effects derived from our statistical model, rather than directly from the phylogenetic tree), we can't directly compare our estimates to those values. However, the general pattern is consistent: morphological traits associated with male-male competition show very strong phylogenetic signal, while behavioral and demographic traits like group composition and paternity share show comparatively less.
+
+### Primary males’ paternity share is strongly influenced by the kinds of groups in which they live
+
+Interestingly, pair-living species encompass both lowest and highest rates of paternity loss for primary males. For species that live in cohesive pairs, primary males sire about 90% of their partners’ offspring. For species that live in dispersed pairs, primary males sire only about 55%. Similar findings have been reported for a broader range of mammalian species with socially monogamous mating systems [@Clutton-BrockIsvaran2006; @Hucketal2014]. @CohasAllaine2009 found no difference between socially monogamous species that form dispersed and cohesive pair bonds, but they reported that solitary species have much higher rates of extra group paternities than pair-living species. This category includes at least one species, the fork-marked lemur (*Phaner furcifer*) that other researchers have described as having dispersed pair bonds [@SchulkeKappeler2003]. Thus, the preponderance of evidence suggests that for socially monogamous mammals, paternity patterns are strongly influenced by patterns of association. This highlights the problems with assuming that monogamy is a single thing, a point which has been made repeatedly by other authors [@Fernandez-Duqueetal2020].
+
+Males in single-male/multi-female groups sire the great majority of offspring within their groups, but do not monopolize paternity as successfully as males in cohesive pairs do. This is likely to reflect the fact that competition over access to groups of females is more intense than competition over access to single females and it is harder for males to monopolize multiple females than to monopolize single females. Blue monkeys, for example, typically form single-male/multi-female groups, but there are regular incursions by outside males during the mating season. Larger numbers of sexually receptive females draw larger numbers of outside males [@GaoCords2020]. 
+
+Primary males living in multi-male groups lose more paternities than primary males living in cohesive pairs or in single-male/multi-female groups. @Clutton-BrockIsvaran2006 reported similar patterns. Paternity losses by primary males in multi-male groups may be the product of several different mechanisms. First, primary males may not be able to monopolize paternity when more than one sexually receptive female is present [@Altmann1962]. Overlap in female receptivity is particularly likely to occur in multi-male/multi-female groups because there are larger numbers of females in these groups [@Ostneretal2008]. Second, in species with long male tenures, females may avoid mating with closely related males. The tenures of primary males in white faced capuchin groups are sometimes long enough that females live in the same groups as their fathers, and males don’t sire the offspring of closely related females [@Godoyetal2016; @Wikbergetal2017]. Third, males in multi-male groups may form coalitions that influence their access to sexually receptive females. Middle-ranking male olive and yellow baboons team up to disrupt consortships of high-ranking males [@Packer1977; @Noe1992], although we don’t know whether these consort takeovers influence paternity. Male chimpanzees rely on their social ties with other males to obtain and maintain high rank and to defend the boundaries of their territories. Alpha males selectively tolerate matings by their allies [@Brayetal2016; @Duffyetal2007], and this translates into paternity success for males with close ties to the alpha male [@Feldblumetal2021].
+
+### Primary males in multi-male groups mostly lose paternities to other resident males 
+
+Our data also show that primary males in multi-male groups lose the majority of paternities to other males within their groups, not to extra-group males. This may be because resident males actively deter incursions by outside males or because subordinate residents are better able to capitalize on reproductive opportunities than outside males. For example, male chacma baboons “monitor consortships so assiduously that they rapidly recognize both when an unexpected mating opportunity arises and when a consortship has ended“ [@Crockfordetal2007, p. 889]. This may give them an important advantage over extra-group males. 
+
+### Limitations of the study
+
+Our study has a number of limitations. First, almost all of the samples are incomplete. In some cases, not all infants born in the population during the study period were sampled, not all potential sires were sampled, or it was not possible to exclude more than one male as the sire of a particular infant. We have estimated the minimum and maximum values of the primary males’ paternity share and the proportion of extra-group paternities, but the real values lie somewhere in between. Second, most species are represented by a single study population, and sometimes a single group. This may bias estimates of the range of variation within and between species (see Alberts et al. XXXX). Third, many species are missing from our database and certain taxa are over-represented.  
+
+In addition, the exercise of writing out our theoretical model made it clear that there is a significant disconnect between the data that would ideally be available to answer our questions, versus the data that are actually available. In particular, it would be best to use conception-level data and to have quantitative information about the degree of extra-group competition that males face. 
+
+### Conclusions
+
+In many respects, our analysis of the largest genetic paternity set assembled on primates to date confirms results from other studies. Primary males consistently obtain the largest share of paternities, but their odds are lower when they live in groups with other males than when they do not. It is also clear that despite this general pattern, there is considerable variation in primary males' ability to control reproduction in their groups, regardless of social group structure. 
+
+However, our results also contained some surprises. Breeding seasonality, which in theory should be a proxy for males' ability to monopolize mating opportunities, did not predict primary males' paternity share regardless of the type of group they lived in (though note that prior studies have found mixed evidence both for effects of seasonality itself, and for the idea that seasonality necessarily means high reproductive synchrony: @KutsukakeNunn2006; @Ostneretal2008; @Paul1997; @GogartenKoenig2013). In addition, pair-living species had both the highest and lowest rates of primary male paternity share. 
+
+# Acknowledgements
+
+We would like to thank Adrian Jaggi, Eduardo Fernandez-Duque, and Jason Kamilar for their advice and thoughts on these analyses, as well as Stephanie Fox and Pascale Sicotte, Carola Borries, Sylvain Gatti, Liza Moscovice and Robert Seyfarth, and [XXXX whoever else Joan wants to thank for the olive baboon data] for contributing unpublished paternity. Maud Mouginot, Amy Scott, Joseph Feldblum, Songtao Guo, Caroline Nievergelt, Carola Borries, and [who am I forgetting? XXXX]  all helped us untangle and extract data from published papers, for which we are extremely grateful. 
+
+# References

@@ -1,0 +1,16 @@
+# Literature PDFs and documents (copyrighted, too large for Git)
+literature/paternity-table-sources/*.pdf
+literature/paternity-table-sources/*.doc
+literature/paternity-table-sources/*.docx
+literature/paternity-table-sources/*.xlsx
+
+# R model cache files (large, can be regenerated)
+output/model-objects/*.rds
+
+# macOS system files
+.DS_Store
+
+# R temporary files
+.Rhistory
+.RData
+.Rproj.user/
