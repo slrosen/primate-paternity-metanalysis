@@ -1,0 +1,671 @@
+---
+title: "Supplementary Materials: Distribution of genetic paternity in primate groups"
+author: "Stacy Rosenbaum, Nicholas Grebe, and Joan B. Silk"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: false
+    extra_dependencies: ["float"]
+  word_document: default
+header-includes:
+  - \usepackage{geometry}
+  - \geometry{margin=1in}
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{caption}
+  - \captionsetup{font=footnotesize,labelfont=bf,justification=raggedright,singlelinecheck=false}
+  - \usepackage{etoolbox}
+  - \AtBeginEnvironment{minipage}{\raggedright\setlength{\parskip}{0pt}\setlength{\baselineskip}{8pt}}
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = file.path(dirname(input), "..", "output"),
+      ...
+    )
+  })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.align = "center", fig.pos = "H")
+library(brms)
+library(gt)
+library(posterior)
+library(dplyr)
+library(readxl)
+library(tidyr)
+library(ggplot2)
+library(ape)
+library(stringr)
+
+# Run the same data cleaning pipeline as the main manuscript
+source("clean_and_merge_data.R")
+
+# Load phylogenetic covariance matrix
+phylo_matrix <- as.matrix(read.csv("../data/phylogeny/phylo_matrix.csv", row.names = 1))
+
+# Read merged data
+data <- read.csv("../data/paternity-table/paternity_table_merged.csv",
+                 stringsAsFactors = FALSE)
+data$species_nonphylo <- data$genus_species_subspecies
+
+# Replicate the data_clean pipeline from the main Rmd
+data_clean <- data %>%
+  filter(
+    exclude_entry != "yes" | is.na(exclude_entry),
+    !(newest_biggest %in% "no"),
+    condition == "wild"
+  )
+
+data_clean <- data_clean %>%
+  mutate(
+    n_primary_maximum = rowSums(
+      select(., n_alphaprimary, n_residents_unknownrank, n_tested_undetermined),
+      na.rm = FALSE
+    ),
+    n_egp_maximum = rowSums(
+      select(., n_egp, n_egp_ambiguous),
+      na.rm = TRUE
+    ),
+    proportion_egp_minimum = n_egp / n_paternities,
+    proportion_primary_minimum = n_alphaprimary / n_paternities,
+    proportion_primary_maximum = n_primary_maximum / n_paternities,
+    proportion_egp_maximum = n_egp_maximum / n_paternities
+  )
+
+# Multi-male subset (used for Q3 loss source models)
+data_subset_mm <- data_clean %>%
+  filter(grp_composition %in% c("MMF", "MMFF"))
+
+data_clean <- data_clean %>%
+  mutate(
+    proportion_primary_minimum_adj = case_when(
+      proportion_primary_minimum == 0 ~ 0.001,
+      proportion_primary_minimum == 1 ~ 0.999,
+      TRUE ~ proportion_primary_minimum
+    ),
+    proportion_primary_maximum_adj = case_when(
+      proportion_primary_maximum == 0 ~ 0.001,
+      proportion_primary_maximum == 1 ~ 0.999,
+      TRUE ~ proportion_primary_maximum
+    ),
+    proportion_egp_minimum_adj = case_when(
+      proportion_egp_minimum == 0 ~ 0.001,
+      proportion_egp_minimum == 1 ~ 0.999,
+      TRUE ~ proportion_egp_minimum
+    ),
+    proportion_egp_maximum_adj = case_when(
+      proportion_egp_maximum == 0 ~ 0.001,
+      proportion_egp_maximum == 1 ~ 0.999,
+      TRUE ~ proportion_egp_maximum
+    )
+  )
+
+# Set up group composition variables
+data_clean$grp_composition_recode <- as.character(data_clean$grp_composition)
+data_clean$grp_composition_recode[data_clean$grp_composition_recode %in% c("MMF", "MMFF")] <- "MM"
+data_clean$grp_composition_recode <- factor(data_clean$grp_composition_recode)
+data_clean$grp_composition_recode <- relevel(data_clean$grp_composition_recode, ref = "MM")
+
+# Set up competition/monopolizability variables
+data_clean <- data_clean %>%
+  mutate(
+    grp_composition_recode_binary = case_when(
+      grp_composition_recode %in% c("MF", "MFF") ~ "SM",
+      grp_composition_recode == "MM" ~ "MM"
+    ),
+    grp_composition_recode_binary = factor(
+      grp_composition_recode_binary,
+      levels = c("MM", "SM")
+    ),
+    n = if_else(grp_composition_recode_binary == "SM", 1, 0)
+  )
+
+data_clean$m <- data_clean$seasonality_3c
+data_clean$m2 <- data_clean$m^2
+
+# Helper: print a gt table, fixing footnote spacing in PDF output
+# (copied from main Rmd to ensure consistent formatting)
+print_gt <- function(tbl, pos = NULL, label = NULL, narrow = FALSE) {
+  if (knitr::is_latex_output()) {
+    latex_out <- as.character(gt::as_latex(tbl))
+    latex_out <- sub(
+      "\\begin{minipage}{\\linewidth}",
+      "\\begin{minipage}{\\linewidth}\\raggedright\\setlength{\\parskip}{0pt}\\setlength{\\baselineskip}{8pt}",
+      latex_out, fixed = TRUE
+    )
+    # Remove stray font size commands that gt injects after the title text
+    latex_out <- gsub("\\\\(scriptsize|small|footnotesize) }", " }", latex_out, perl = TRUE)
+    if (!is.null(pos)) {
+      latex_out <- sub("\\begin{table}[t]",
+                       paste0("\\begin{table}[", pos, "]"),
+                       latex_out, fixed = TRUE)
+    }
+    if (!is.null(label)) {
+      latex_out <- sub("\\begin{tabular",
+                       paste0("\\label{", label, "}\n\\begin{tabular"),
+                       latex_out, fixed = TRUE)
+    }
+    if (narrow) {
+      # Replace stretched tabular* with regular tabular so table fits its content
+      latex_out <- gsub("\\begin{tabular*}{\\linewidth}{@{\\extracolsep{\\fill}}",
+                        "\\begin{tabular}{", latex_out, fixed = TRUE)
+      latex_out <- gsub("\\end{tabular*}", "\\end{tabular}", latex_out, fixed = TRUE)
+    }
+    knitr::asis_output(latex_out)
+  } else {
+    knitr::asis_output(gt::as_raw_html(tbl))
+  }
+}
+
+# Load all max models from the main analysis
+intercept_only_model <- readRDS("../output/model-objects/intercept_only_model.rds")
+intercept_only_model_min <- readRDS("../output/model-objects/intercept_only_model_min.rds")
+paternityloss_grptype_model <- readRDS("../output/model-objects/paternityloss_grptype_model.rds")
+competition_monopolizability_model <- readRDS("../output/model-objects/competition_monopolizability_model.rds")
+loss_source_model_mm <- readRDS("../output/model-objects/loss_source_model_mm.rds")
+```
+
+# 1. Bayesian model diagnostics
+
+Table S1 summarizes convergence diagnostics for the Bayesian models reported in the main text. Q1 refers to the models used to answer Question 1 in the results in the main text; Q2/A1 and Q2/A2 refer to Question 2, Analysis 1 and 2 respectively, and Q3 refers to Question 3. Figures S1–S5 show the posterior predictive checks for each of these models. In each plot, the dark blue line represents the observed data distribution, and the lighter blue lines represent distributions simulated from the fitted model's posterior. Significant overlap between the observed and simulated distributions indicates that the model captured the important features of the data.
+
+
+```{r model-diagnostics, results='asis'}
+
+model_list <- list(
+  "Q1: Phylogeny (Intercept-only, max)"         = intercept_only_model,
+  "Q1: Phylogeny (Intercept-only, min)"         = intercept_only_model_min,
+  "Q2/A1: Group composition"                   = paternityloss_grptype_model,
+  "Q2/A2: Competition/seasonality" = competition_monopolizability_model,
+  "Q3: Paternity loss source"             = loss_source_model_mm
+)
+
+diag_rows <- lapply(names(model_list), function(nm) {
+  m <- model_list[[nm]]
+  s <- summary(m)
+
+  fixed <- s$fixed
+  random_parts <- s$random
+  all_params <- fixed
+  for (r in random_parts) {
+    all_params <- rbind(all_params, r)
+  }
+
+  max_rhat <- max(all_params$Rhat, na.rm = TRUE)
+  min_bulk_ess <- min(all_params$Bulk_ESS, na.rm = TRUE)
+  min_tail_ess <- min(all_params$Tail_ESS, na.rm = TRUE)
+
+  np <- nuts_params(m)
+  n_divergent <- sum(np$Value[np$Parameter == "divergent__"])
+
+  data.frame(
+    Model = nm,
+    Max_Rhat = round(max_rhat, 4),
+    Min_Bulk_ESS = round(min_bulk_ess, 0),
+    Min_Tail_ESS = round(min_tail_ess, 0),
+    Divergent_Transitions = n_divergent,
+    stringsAsFactors = FALSE
+  )
+})
+
+diag_df <- do.call(rbind, diag_rows)
+
+diag_table <- gt(diag_df) %>%
+  tab_header(title = "Table S1. Bayesian model convergence diagnostics") %>%
+  cols_label(
+    Model = "Model",
+    Max_Rhat = md("Max<br>Rhat"),
+    Min_Bulk_ESS = md("Min<br>Bulk ESS"),
+    Min_Tail_ESS = md("Min<br>Tail ESS"),
+    Divergent_Transitions = md("Divergent<br>transitions")
+  ) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(diag_table, pos = "H")
+
+```
+
+## Posterior Predictive Checks
+
+```{r pp-check-s1, fig.width=7, fig.height=4}
+pp_check(intercept_only_model, type = "dens_overlay", ndraws = 100) +
+  ggplot2::ggtitle("Figure S1. Q1 Phylogeny (Intercept-only, max)") +
+  ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
+```
+
+```{r pp-check-s2, fig.width=7, fig.height=4}
+pp_check(intercept_only_model_min, type = "dens_overlay", ndraws = 100) +
+  ggplot2::ggtitle("Figure S2. Q1 Phylogeny (Intercept-only, min)") +
+  ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
+```
+
+```{r pp-check-s3, fig.width=7, fig.height=4}
+pp_check(paternityloss_grptype_model, type = "dens_overlay", ndraws = 100) +
+  ggplot2::ggtitle("Figure S3. Q2/A1 Group composition") +
+  ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
+```
+
+```{r pp-check-s4, fig.width=7, fig.height=4}
+pp_check(competition_monopolizability_model, type = "dens_overlay", ndraws = 100) +
+  ggplot2::ggtitle("Figure S4. Q2/A2 Competition/monopolizability") +
+  ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
+```
+
+```{r pp-check-s5, fig.width=7, fig.height=4}
+pp_check(loss_source_model_mm, type = "dens_overlay", ndraws = 100) +
+  ggplot2::ggtitle("Figure S5. Q3 Paternity loss source (min, in main text)") +
+  ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
+```
+
+\newpage
+
+# 2. Sensitivity analysis: assignment of uncertain paternities
+
+### A. The effects of group composition (Question 2, Analysis 1 in main text)
+
+In the main text the models for Question 2 use the maximum possible estimate of primary male paternity share. I.e., all uncertain paternities are assigned to primary males. For comparison purposes, here we present results from those models alongside results from models using minimum estimates, in which none of the uncertain paternities are assigned to primary males.
+
+```{r grptype-max-summary, results='asis'}
+
+s_grp_max <- summary(paternityloss_grptype_model)
+
+fe_grp_max <- as.data.frame(s_grp_max$fixed)
+fe_grp_max$Parameter <- rownames(fe_grp_max)
+fe_grp_max$Parameter <- recode(fe_grp_max$Parameter,
+  "Intercept" = "Intercept (Multi-male)",
+  "grp_composition_recodeMF" = "Pair-living",
+  "grp_composition_recodeMFF" = "Single-male/multi-female"
+)
+fe_grp_max <- fe_grp_max %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+gt_grp_max <- gt(fe_grp_max) %>%
+  tab_header(title = "Table S2. Model results: Maximum primary male paternity share (in main text)") %>%
+  fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
+  fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_grp_max, pos = "H")
+```
+
+```{r grptype-min-model, results='hide', fig.show='hide'}
+
+if (file.exists("../output/model-objects/paternityloss_grptype_model_min.rds")) {
+  paternityloss_grptype_model_min <- readRDS("../output/model-objects/paternityloss_grptype_model_min.rds")
+} else {
+  paternityloss_grptype_model_min <- brm(
+    bf(proportion_primary_minimum_adj | weights(n_paternities^0.5) ~
+         grp_composition_recode +
+         (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+         (1 | species_nonphylo)),
+    family = Beta(),
+    data = data_clean,
+    data2 = list(phylo_matrix = phylo_matrix),
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(normal(0, 1), class = "b"),
+      prior(student_t(3, 0, 2.5), class = "sd"),
+      prior(student_t(3, 0, 2.5), class = "phi")
+    ),
+    chains = 4, iter = 10000, seed = 123,
+    control = list(adapt_delta = 0.99)
+  )
+  saveRDS(paternityloss_grptype_model_min, "../output/model-objects/paternityloss_grptype_model_min.rds")
+}
+```
+
+```{r grptype-min-summary, results='asis'}
+
+s_grp_min <- summary(paternityloss_grptype_model_min)
+
+# Extract fixed effects
+fe_grp <- as.data.frame(s_grp_min$fixed)
+fe_grp$Parameter <- rownames(fe_grp)
+fe_grp$Parameter <- recode(fe_grp$Parameter,
+  "Intercept" = "Intercept (Multi-male)",
+  "grp_composition_recodeMF" = "Pair-living",
+  "grp_composition_recodeMFF" = "Single-male/multi-female"
+)
+fe_grp <- fe_grp %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+gt_grp <- gt(fe_grp) %>%
+  tab_header(title = "Table S3. Model results: Minimum primary male paternity share") %>%
+  fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
+  fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_grp, pos = "H")
+```
+
+
+```{r grptype-max-proportions, results='asis'}
+
+dr_grp_max <- as_draws_df(paternityloss_grptype_model)
+
+eta_MM_max  <- dr_grp_max$b_Intercept
+eta_MF_max  <- eta_MM_max + dr_grp_max$`b_grp_composition_recodeMF`
+eta_MFF_max <- eta_MM_max + dr_grp_max$`b_grp_composition_recodeMFF`
+
+mu_MM_max  <- plogis(eta_MM_max)
+mu_MF_max  <- plogis(eta_MF_max)
+mu_MFF_max <- plogis(eta_MFF_max)
+
+prop_summary_max <- data.frame(
+  `Group type` = c("Multi-male", "Pair-living", "Single-male/multi-female"),
+  Mean = sprintf("%.1f%%", c(mean(mu_MM_max), mean(mu_MF_max), mean(mu_MFF_max)) * 100),
+  `95% CI` = sprintf("%.1f%% - %.1f%%",
+    c(quantile(mu_MM_max, 0.025), quantile(mu_MF_max, 0.025), quantile(mu_MFF_max, 0.025)) * 100,
+    c(quantile(mu_MM_max, 0.975), quantile(mu_MF_max, 0.975), quantile(mu_MFF_max, 0.975)) * 100),
+  check.names = FALSE
+)
+
+gt_prop_max <- gt(prop_summary_max) %>%
+  tab_header(title = "Table S4. Predicted paternity share using maximum estimate (in main text)") %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_prop_max, pos = "H", narrow = TRUE)
+```
+
+```{r grptype-min-proportions, results='asis'}
+
+# Convert to proportion scale
+dr_grp <- as_draws_df(paternityloss_grptype_model_min)
+
+eta_MM  <- dr_grp$b_Intercept
+eta_MF  <- eta_MM + dr_grp$`b_grp_composition_recodeMF`
+eta_MFF <- eta_MM + dr_grp$`b_grp_composition_recodeMFF`
+
+mu_MM  <- plogis(eta_MM)
+mu_MF  <- plogis(eta_MF)
+mu_MFF <- plogis(eta_MFF)
+
+prop_summary <- data.frame(
+  `Group type` = c("Multi-male", "Pair-living", "Single-male/multi-female"),
+  Mean = sprintf("%.1f%%", c(mean(mu_MM), mean(mu_MF), mean(mu_MFF)) * 100),
+  `95% CI` = sprintf("%.1f%% - %.1f%%",
+    c(quantile(mu_MM, 0.025), quantile(mu_MF, 0.025), quantile(mu_MFF, 0.025)) * 100,
+    c(quantile(mu_MM, 0.975), quantile(mu_MF, 0.975), quantile(mu_MFF, 0.975)) * 100),
+  check.names = FALSE
+)
+
+gt_prop <- gt(prop_summary) %>%
+  tab_header(title = "Table S5. Predicted paternity share using minimum estimate") %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_prop, pos = "H", narrow = TRUE)
+```
+
+### B. The effects of in-group competition and seasonality (Question 2, Analysis 2 in main text)
+
+```{r comp-monop-max-summary, results='asis'}
+
+s_comp_max <- summary(competition_monopolizability_model)
+
+fe_comp_max <- as.data.frame(s_comp_max$fixed)
+fe_comp_max$Parameter <- rownames(fe_comp_max)
+fe_comp_max$Parameter <- recode(fe_comp_max$Parameter,
+  "Intercept" = "Intercept",
+  "n" = "Competition",
+  "m" = "Seasonality",
+  "m2" = "Seasonality^2",
+  "n:m" = "Competition*Seasonality"
+)
+fe_comp_max <- fe_comp_max %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+gt_comp_max <- gt(fe_comp_max) %>%
+  tab_header(title = "Table S6. Model results: Maximum primary male paternity share (in main text)") %>%
+  fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
+  fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
+  tab_footnote(
+    footnote = "Single-male versus multi-male group",
+    locations = cells_body(columns = Parameter, rows = Parameter == "Competition")
+  ) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_comp_max, pos = "H")
+```
+
+
+```{r comp-monop-min-model, results='hide', fig.show='hide'}
+
+if (file.exists("../output/model-objects/competition_monopolizability_model_min.rds")) {
+  competition_monopolizability_model_min <- readRDS("../output/model-objects/competition_monopolizability_model_min.rds")
+} else {
+  competition_monopolizability_model_min <- brm(
+    formula = bf(
+      proportion_primary_minimum_adj | weights(n_paternities^0.5) ~
+        n + m + m2 + n:m +
+        (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+        (1 | species_nonphylo)
+    ),
+    data = data_clean,
+    family = Beta(link = "logit"),
+    data2 = list(phylo_matrix = phylo_matrix),
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(normal(0, 1), class = "b"),
+      prior(student_t(3, 0, 2.5), class = "sd"),
+      prior(student_t(3, 0, 2.5), class = "phi")
+    ),
+    control = list(adapt_delta = 0.99),
+    chains = 4, cores = 4, iter = 10000, seed = 123
+  )
+  saveRDS(competition_monopolizability_model_min, "../output/model-objects/competition_monopolizability_model_min.rds")
+}
+```
+
+```{r comp-monop-min-summary, results='asis'}
+
+s_comp_min <- summary(competition_monopolizability_model_min)
+
+fe_comp <- as.data.frame(s_comp_min$fixed)
+fe_comp$Parameter <- rownames(fe_comp)
+fe_comp$Parameter <- recode(fe_comp$Parameter,
+  "Intercept" = "Intercept",
+  "n" = "Competition",
+  "m" = "Seasonality",
+  "m2" = "Seasonality^2",
+  "n:m" = "Competition*Seasonality"
+)
+fe_comp <- fe_comp %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+gt_comp <- gt(fe_comp) %>%
+  tab_header(title = "Table S7. Model results: Minimum primary male paternity share") %>%
+  fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
+  fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
+  tab_footnote(
+    footnote = "Single-male versus multi-male group",
+    locations = cells_body(columns = Parameter, rows = Parameter == "Competition")
+  ) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_comp, pos = "H")
+```
+
+
+**Comparing the conditional effect of in-group competition between models** Because the competition/seasonality models presented above contain interaction terms, the main effect of competition cannot be interpreted in isolation. In the below tables we compute the conditional effect of competition (i.e., the difference in predicted paternity share between single-male and multi-male groups) at different levels of seasonality for both the maximum and minimum paternity share models. The purpose of this is to determine whether the difference in the main effect coefficient on the competition parameter leads to a substantively different conclusion.
+
+```{r conditional-competition-effects, results='asis'}
+
+m_vals <- c(
+  "Most seasonal" = 1,
+  "Moderately seasonal" = 2,
+  "Least seasonal" = 3
+)
+
+# Function to compute conditional effect of competition at given m values
+conditional_comp_effect <- function(model, m_vals) {
+  dr <- as_draws_df(model)
+
+  results <- lapply(names(m_vals), function(nm) {
+    m_val <- m_vals[nm]
+    m2_val <- m_val^2
+
+    # Logit-scale predictions for MM (n=0) and SM (n=1)
+    eta_MM <- dr$b_Intercept + dr$b_m * m_val + dr$b_m2 * m2_val
+    eta_SM <- eta_MM + dr$b_n + dr$`b_n:m` * m_val
+
+    # Convert to proportion scale
+    mu_MM <- plogis(eta_MM)
+    mu_SM <- plogis(eta_SM)
+
+    # Difference (SM - MM)
+    diff <- mu_SM - mu_MM
+
+    data.frame(
+      Seasonality = nm,
+      `Multi-male predicted` = sprintf("%.1f%%", mean(mu_MM) * 100),
+      `Single-male predicted` = sprintf("%.1f%%", mean(mu_SM) * 100),
+      `Difference` = sprintf("%.1f%%", mean(diff) * 100),
+      `95% CI` = sprintf("%.1f%% to %.1f%%",
+        quantile(diff, 0.025) * 100,
+        quantile(diff, 0.975) * 100),
+      check.names = FALSE
+    )
+  })
+
+  do.call(rbind, results)
+}
+
+# Max model
+cond_max <- conditional_comp_effect(competition_monopolizability_model, m_vals)
+
+gt_cond_max <- gt(cond_max) %>%
+  tab_header(title = "Table S8. Conditional effect of competition (maximum estimate)") %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_cond_max, pos = "H")
+```
+
+```{r conditional-competition-effects-min, results='asis'}
+
+# Min model
+cond_min <- conditional_comp_effect(competition_monopolizability_model_min, m_vals)
+
+gt_cond_min <- gt(cond_min) %>%
+  tab_header(title = "Table S9. Conditional effect of competition (minimum estimate)") %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_cond_min, pos = "H")
+```
+
+**Interpretation** In both models, competition has a meaningful effect on primary male paternity share: males in single-male groups are predicted to obtain a substantially higher share of paternities than males in multi-male groups at all levels of seasonality. However, the minimum estimate model produces larger point estimates for this effect (~23-30% difference versus ~18-19% difference in the maximum estimate model). This is not surprising. Reassigning uncertain paternities away from primary males disproportionately reduces the predicted primary male paternity share in multi-male groups, where most of the ambiguity in paternity assignment occurs. However, there is considerable overlap in the 95% credible intervals between the two models at every level of seasonality. Thus, these two different methods of operationalizing primary male paternity share do not ultimately yield distinguishable estimates of the effect of competition. The qualitative conclusion (that competition is an important predictor of primary male paternity share, while seasonality is not) is robust to the decisions we made about how to handle uncertain paternities.
+
+### C. Source of paternity losses in multi-male groups (Question 3 in main text)
+
+In the main text we model the proportion of lost paternities attributable to extra-group males versus non-primary resident males using the minimum extra-group paternity (EGP) count (i.e., only confirmed extra-group paternities). Here we present that model alongside a model using the maximum possible EGP count, in which ambiguous paternities are assigned to extra-group males. Results are qualitatively similar regardless of which choice is made. 
+
+```{r loss-source-min-summary, results='asis'}
+
+s_loss_min <- summary(loss_source_model_mm)
+
+fe_loss_min <- as.data.frame(s_loss_min$fixed)
+fe_loss_min$Parameter <- rownames(fe_loss_min)
+fe_loss_min$Parameter <- recode(fe_loss_min$Parameter,
+  "Intercept" = "Intercept"
+)
+fe_loss_min <- fe_loss_min %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+gt_loss_min <- gt(fe_loss_min) %>%
+  tab_header(title = "Table S10. Paternity loss source model: Minimum EGP count (in main text)") %>%
+  fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
+  fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_loss_min, pos = "H")
+```
+
+```{r loss-source-max-model, results='hide', fig.show='hide'}
+
+loss_source_data_mm_max <- data_subset_mm %>%
+  mutate(
+    n_egp_maximum = as.integer(n_egp_maximum),
+    n_igp_max    = as.integer(n_paternities - n_alphaprimary - n_egp_maximum),
+    n_igp_max    = pmax(n_igp_max, 0L),
+    total_losses_max = n_egp_maximum + n_igp_max,
+    model_weights = n_paternities^0.5
+  ) %>%
+  filter(
+    !is.na(n_egp_maximum),
+    !is.na(n_igp_max),
+    !is.na(n_paternities),
+    !is.na(genus_species_subspecies),
+    !is.na(species_nonphylo)
+  )
+
+if (file.exists("../output/model-objects/loss_source_model_mm_max.rds")) {
+  loss_source_model_mm_max <- readRDS("../output/model-objects/loss_source_model_mm_max.rds")
+} else {
+  loss_source_model_mm_max <- brm(
+    bf(n_egp_maximum | trials(total_losses_max) ~
+         (1 | gr(genus_species_subspecies, cov = phylo_matrix)) +
+         (1 | species_nonphylo)),
+    family = binomial(),
+    data = loss_source_data_mm_max,
+    data2 = list(phylo_matrix = phylo_matrix),
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(student_t(3, 0, 2.5), class = "sd")
+    ),
+    sample_prior = "no",
+    chains = 4, iter = 10000, seed = 123,
+    control = list(adapt_delta = 0.99)
+  )
+  saveRDS(loss_source_model_mm_max, "../output/model-objects/loss_source_model_mm_max.rds")
+}
+```
+
+```{r loss-source-max-summary, results='asis'}
+
+s_loss_max <- summary(loss_source_model_mm_max)
+
+fe_loss_max <- as.data.frame(s_loss_max$fixed)
+fe_loss_max$Parameter <- rownames(fe_loss_max)
+fe_loss_max$Parameter <- recode(fe_loss_max$Parameter,
+  "Intercept" = "Intercept"
+)
+fe_loss_max <- fe_loss_max %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+gt_loss_max <- gt(fe_loss_max) %>%
+  tab_header(title = "Table S11. Paternity loss source model: Maximum EGP count") %>%
+  fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
+  fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_loss_max, pos = "H")
+```
+
+```{r loss-source-min-proportions, results='asis'}
+
+egp_loss_min <- posterior_linpred(loss_source_model_mm, transform = TRUE, re_formula = NA) %>%
+  as.data.frame()
+
+prop_loss_min <- data.frame(
+  `Loss source` = c("Extra-group males", "Non-primary resident males"),
+  Mean = sprintf("%.1f%%", c(mean(egp_loss_min$V1), mean(1 - egp_loss_min$V1)) * 100),
+  `95% CI` = sprintf("%.1f%% - %.1f%%",
+    c(quantile(egp_loss_min$V1, 0.025), quantile(1 - egp_loss_min$V1, 0.025)) * 100,
+    c(quantile(egp_loss_min$V1, 0.975), quantile(1 - egp_loss_min$V1, 0.975)) * 100),
+  check.names = FALSE
+)
+
+gt_loss_prop_min <- gt(prop_loss_min) %>%
+  tab_header(title = "Table S12. Predicted paternity loss source: Minimum EGP count (in main text)") %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_loss_prop_min, pos = "H", narrow = TRUE)
+```
+
+```{r loss-source-max-proportions, results='asis'}
+
+egp_loss_max <- posterior_linpred(loss_source_model_mm_max, transform = TRUE, re_formula = NA) %>%
+  as.data.frame()
+
+prop_loss_max <- data.frame(
+  `Loss source` = c("Extra-group males", "Non-primary resident males"),
+  Mean = sprintf("%.1f%%", c(mean(egp_loss_max$V1), mean(1 - egp_loss_max$V1)) * 100),
+  `95% CI` = sprintf("%.1f%% - %.1f%%",
+    c(quantile(egp_loss_max$V1, 0.025), quantile(1 - egp_loss_max$V1, 0.025)) * 100,
+    c(quantile(egp_loss_max$V1, 0.975), quantile(1 - egp_loss_max$V1, 0.975)) * 100),
+  check.names = FALSE
+)
+
+gt_loss_prop_max <- gt(prop_loss_max) %>%
+  tab_header(title = "Table S13. Predicted paternity loss source: Maximum EGP count") %>%
+  tab_options(heading.title.font.size = px(14), table.font.size = "small")
+print_gt(gt_loss_prop_max, pos = "H", narrow = TRUE)
+```

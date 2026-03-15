@@ -1,18 +1,17 @@
 # clean_and_merge_data.R
 #
-# This script replaces the two Stata .do files that previously cleaned and merged
+# This script replaces two Stata .do files that previously cleaned and merged
 # the paternity data. It reads three Excel files, cleans variable names, merges
 # the data, and saves the result as a CSV.
 #
 # Inputs:
 #   - data/paternity-table/paternity_table.xlsx
 #   - data/paternity-table/seasonality_data.xlsx
-#   - data/paternity-table/demographic_morphological_data.xlsx
+#   - data/paternity-table/morphology_lifehistory_data.xlsx
 #
 # Output:
 #   - data/paternity-table/paternity_table_merged.csv
 #
-# Original Stata files preserved for reference in code/stata/
 
 library(readxl)
 library(dplyr)
@@ -23,8 +22,8 @@ library(stringr)
 data_dir <- file.path("..", "data", "paternity-table")
 
 # =============================================================================
-# STEP 1: Import and clean the paternity table
-# (Replaces: Paternity table cleaning file.do)
+# Step 1: Import and clean the paternity table
+# (Replaces original file Paternity table cleaning file.do)
 # =============================================================================
 
 paternity <- read_excel(
@@ -35,8 +34,6 @@ paternity <- read_excel(
 # Rename columns from Excel headers to analysis variable names
 paternity <- paternity %>%
   rename(
-    entrynumber = `Entry number`,
-    js_or_sr = `JS or SR`,
     dateofentry = `Date Added/Changed`,
     study_overlap = `Overlap with other study?`,
     study_overlap_name = `If overlap, what study does it overlap with?`,
@@ -102,7 +99,7 @@ paternity <- paternity %>%
 
 # Drop empty columns and entry number (matches Stata: drop bl bm bn entrynumber)
 paternity <- paternity %>%
-  select(-entrynumber, -any_of(c("...64", "...65", "...66")))
+  select(-any_of(c("...64", "...65", "...66")))
 
 # Remove any fully empty columns that may have come through
 paternity <- paternity %>%
@@ -123,8 +120,8 @@ paternity <- paternity %>%
   )
 
 # =============================================================================
-# STEP 2: Import and clean the seasonality data
-# (Replaces first section of: Merge paternity & demo:morpho tables.do)
+# Step 1: Import and clean the seasonality data
+# (Replaces first section of Merge paternity & demo:morpho tables.do)
 # =============================================================================
 
 seasonality <- read_excel(
@@ -162,12 +159,12 @@ seasonality <- seasonality %>%
   select(-species_full)
 
 # =============================================================================
-# STEP 3: Import and clean the demographics/morphology data
-# (Replaces second section of: Merge paternity & demo:morpho tables.do)
+# Step 3: Import and clean the demographics/morphology data
+# (Replaces second section of Merge paternity & demo:morpho tables.do)
 # =============================================================================
 
 demographics <- read_excel(
-  file.path(data_dir, "demographic_morphological_data.xlsx"),
+  file.path(data_dir, "morphology_lifehistory_data.xlsx"),
   sheet = "Sheet1"
 )
 
@@ -187,8 +184,8 @@ demographics <- demographics %>%
   )
 
 # =============================================================================
-# STEP 4: Merge seasonality into demographics (1:1 on genus + species)
-# (Replaces: merge 1:1 genus_10ktrees_str species_10ktrees_str)
+# Step 4: Merge seasonality into demographics (1:1 on genus + species)
+# (Replaces merge 1:1 genus_10ktrees_str species_10ktrees_str)
 # =============================================================================
 
 demo_seasonal <- left_join(
@@ -198,8 +195,8 @@ demo_seasonal <- left_join(
 )
 
 # =============================================================================
-# STEP 5: Merge demographics+seasonality into paternity (m:1 on genus + species)
-# (Replaces: merge m:1 genus_10ktrees_str species_10ktrees_str)
+# Step 5: Merge demographics+seasonality into paternity (m:1 on genus + species)
+# (Replaces merge m:1 genus_10ktrees_str species_10ktrees_str)
 # =============================================================================
 
 paternity_merged <- left_join(
@@ -208,7 +205,7 @@ paternity_merged <- left_join(
   by = c("genus_10ktrees_str", "species_10ktrees_str")
 )
 
-# Handle any duplicate columns from the merge (e.g., subspecies_10ktrees_str)
+# Deal with any duplicate columns from the merge (e.g., subspecies_10ktrees_str)
 # Keep the paternity table version if there are conflicts
 if ("subspecies_10ktrees_str.y" %in% names(paternity_merged)) {
   paternity_merged <- paternity_merged %>%
@@ -217,7 +214,7 @@ if ("subspecies_10ktrees_str.y" %in% names(paternity_merged)) {
 }
 
 # =============================================================================
-# STEP 6: Save the merged dataset
+# Step 6: Save the merged dataset
 # =============================================================================
 
 write.csv(paternity_merged, file.path(data_dir, "paternity_table_merged.csv"),
