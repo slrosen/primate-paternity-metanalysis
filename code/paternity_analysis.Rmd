@@ -2440,4 +2440,8 @@ Our analyses show that both phylogeny and group composition influence the patern
 
 We would like to thank Adrian Jäggi, Eduardo Fernandez-Duque, and Jason Kamilar for their advice and thoughts on these analyses, as well as Stephanie Fox and Pascale Sicotte, Carola Borries, Sylvain Gatti and colleagues, Liza Moscovice and Robert Seyfarth, Veronika Städele, and Linda Vigilant for contributing unpublished paternity data. Maud Mouginot, Amy Scott, Joseph Feldblum, Songtao Guo, Eva Wikberg, Peter Kappeler, Caroline Nievergelt, and Carola Borries all helped us untangle and extract data from published papers, for which we are extremely grateful.
 
+# GenAI use statement
+
+We used Claude Code to help streamline our data cleaning and compilation workflow, clean and edit code, debug output formatting issues, alphabetize and consolidate/organize .bib files and the associated study pdfs, copy edit the text, and create and update the README file that is available on Github. Our CLAUDE.md file can be found in the project Github repository along with all other materials needed to replicate these analyses (https://github.com/slrosen/primate-paternity-metanalysis).
+
 # References
