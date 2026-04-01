@@ -1,5 +1,5 @@
 ---
-title: "Paternity Table Sources"
+title: "References"
 subtitle: "Bibliography of studies included in Rosenbaum, Grebe, & Silk (2026)"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:

@@ -14,3 +14,6 @@ output/model-objects/*.rds
 .Rhistory
 .RData
 .Rproj.user/
+
+# LaTeX log files
+*.log

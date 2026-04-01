@@ -1,13 +1,22 @@
 ---
-title: "Supplementary Materials: Distribution of genetic paternity in primate groups"
+title: "Distribution of genetic paternity in primate groups"
+subtitle: \Large Supplementary Materials
 author: "Stacy Rosenbaum, Nicholas Grebe, and Joan B. Silk"
+date: ""
 output:
   pdf_document:
     latex_engine: xelatex
     keep_tex: false
     extra_dependencies: ["float"]
   word_document: default
+bibliography: ../literature/paternity-table-sources.bib
+nocite: '@*'
 header-includes:
+  - \usepackage{titling}
+  - \renewcommand{\maketitle}{\begin{center}{\LARGE\bfseries\thetitle\par}\vskip 0.5em{\Large Supplementary Materials\par}\vskip 1em{\normalsize Stacy Rosenbaum, Nicholas Grebe, and Joan B. Silk\par}\end{center}\vskip 2em}
+  - \usepackage{fancyhdr}
+  - \fancypagestyle{firstpage}{\fancyhf{}\renewcommand{\headrulewidth}{0pt}\fancyfoot[L]{\small Document rendered on \today}}
+  - \AtBeginDocument{\thispagestyle{firstpage}}
   - \usepackage{geometry}
   - \geometry{margin=1in}
   - \usepackage{booktabs}
@@ -166,7 +175,44 @@ competition_monopolizability_model <- readRDS("../output/model-objects/competiti
 loss_source_model_mm <- readRDS("../output/model-objects/loss_source_model_mm.rds")
 ```
 
-# 1. Bayesian model diagnostics
+\begin{large}
+\textbf{Contents}
+\end{large}
+
+\vspace{1em}
+
+\begin{large}
+\begin{minipage}{0.85\linewidth}
+\noindent
+1. Bayesian model diagnostics \dotfill\ \pageref{sec:diagnostics}
+
+\vspace{12pt}
+
+\noindent
+2. Sensitivity analyses: assignment of uncertain paternities \dotfill\ \pageref{sec:sensitivity}
+
+\noindent
+\hspace{1.5em}A. The effects of group composition \dotfill\ \pageref{sec:2a}
+
+\noindent
+\hspace{1.5em}B. The effects of in-group competition and seasonality \dotfill\ \pageref{sec:2b}
+
+\noindent
+\hspace{1.5em}C. Source of paternity losses in multi-male groups \dotfill\ \pageref{sec:2c}
+
+\vspace{12pt}
+
+\noindent
+3. Paternity dataset bibliography \dotfill\ \pageref{sec:bibliography}
+\end{minipage}
+\end{large}
+
+\vspace{2em}
+
+\newpage
+
+# 1. Bayesian model diagnostics {#sec:diagnostics}
+\label{sec:diagnostics}
 
 Table S1 summarizes convergence diagnostics for the Bayesian models reported in the main text. Q1 refers to the models used to answer Question 1 in the results in the main text; Q2/A1 and Q2/A2 refer to Question 2, Analysis 1 and 2 respectively, and Q3 refers to Question 3. Figures S1–S5 show the posterior predictive checks for each of these models. In each plot, the dark blue line represents the observed data distribution, and the lighter blue lines represent distributions simulated from the fitted model's posterior. Significant overlap between the observed and simulated distributions indicates that the model captured the important features of the data.
 
@@ -225,7 +271,7 @@ print_gt(diag_table, pos = "H")
 
 ```
 
-## Posterior Predictive Checks
+**Posterior Predictive Checks**
 
 ```{r pp-check-s1, fig.width=7, fig.height=4}
 pp_check(intercept_only_model, type = "dens_overlay", ndraws = 100) +
@@ -247,23 +293,25 @@ pp_check(paternityloss_grptype_model, type = "dens_overlay", ndraws = 100) +
 
 ```{r pp-check-s4, fig.width=7, fig.height=4}
 pp_check(competition_monopolizability_model, type = "dens_overlay", ndraws = 100) +
-  ggplot2::ggtitle("Figure S4. Q2/A2 Competition/monopolizability") +
+  ggplot2::ggtitle("Figure S4. Q2/A2 Competition/seasonality") +
   ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
 ```
 
 ```{r pp-check-s5, fig.width=7, fig.height=4}
 pp_check(loss_source_model_mm, type = "dens_overlay", ndraws = 100) +
-  ggplot2::ggtitle("Figure S5. Q3 Paternity loss source (min, in main text)") +
+  ggplot2::ggtitle("Figure S5. Q3 Paternity loss source") +
   ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
 ```
 
 \newpage
 
-# 2. Sensitivity analysis: assignment of uncertain paternities
+# 2. Sensitivity analyses: assignment of uncertain paternities
+\label{sec:sensitivity}
 
-### A. The effects of group composition (Question 2, Analysis 1 in main text)
+## A. The effects of group composition (Question 2, Analysis 1 in main text)
+\label{sec:2a}
 
-In the main text the models for Question 2 use the maximum possible estimate of primary male paternity share. I.e., all uncertain paternities are assigned to primary males. For comparison purposes, here we present results from those models alongside results from models using minimum estimates, in which none of the uncertain paternities are assigned to primary males.
+In the main text the models for Question 2 use the maximum possible estimate of primary male paternity share; i.e., all uncertain paternities are assigned to primary males. For comparison purposes, here we present results from those models alongside results from models using minimum estimates, in which none of the uncertain paternities are assigned to primary males.
 
 ```{r grptype-max-summary, results='asis'}
 
@@ -329,7 +377,7 @@ fe_grp <- fe_grp %>%
   select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
 
 gt_grp <- gt(fe_grp) %>%
-  tab_header(title = "Table S3. Model results: Minimum primary male paternity share") %>%
+  tab_header(title = "Table S3. Model results: minimum primary male paternity share") %>%
   fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
   fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
@@ -359,7 +407,7 @@ prop_summary_max <- data.frame(
 )
 
 gt_prop_max <- gt(prop_summary_max) %>%
-  tab_header(title = "Table S4. Predicted paternity share using maximum estimate (in main text)") %>%
+  tab_header(title = "Table S4. Model-derived predicted paternity share using maximum estimate (in main text)") %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
 print_gt(gt_prop_max, pos = "H", narrow = TRUE)
 ```
@@ -387,12 +435,13 @@ prop_summary <- data.frame(
 )
 
 gt_prop <- gt(prop_summary) %>%
-  tab_header(title = "Table S5. Predicted paternity share using minimum estimate") %>%
+  tab_header(title = "Table S5. Model-derived predicted paternity share using minimum estimate") %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
 print_gt(gt_prop, pos = "H", narrow = TRUE)
 ```
 
-### B. The effects of in-group competition and seasonality (Question 2, Analysis 2 in main text)
+## B. The effects of in-group competition and seasonality (Question 2, Analysis 2 in main text)
+\label{sec:2b}
 
 ```{r comp-monop-max-summary, results='asis'}
 
@@ -468,7 +517,7 @@ fe_comp <- fe_comp %>%
   select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
 
 gt_comp <- gt(fe_comp) %>%
-  tab_header(title = "Table S7. Model results: Minimum primary male paternity share") %>%
+  tab_header(title = "Table S7. Model results: minimum primary male paternity share") %>%
   fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
   fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
   tab_footnote(
@@ -480,7 +529,7 @@ print_gt(gt_comp, pos = "H")
 ```
 
 
-**Comparing the conditional effect of in-group competition between models** Because the competition/seasonality models presented above contain interaction terms, the main effect of competition cannot be interpreted in isolation. In the below tables we compute the conditional effect of competition (i.e., the difference in predicted paternity share between single-male and multi-male groups) at different levels of seasonality for both the maximum and minimum paternity share models. The purpose of this is to determine whether the difference in the main effect coefficient on the competition parameter leads to a substantively different conclusion.
+**Comparing the conditional effect of in-group competition between models**  Because the competition/seasonality models presented above contain interaction terms, the main effect of competition cannot be interpreted in isolation. In the below tables we compute the conditional effect of competition (i.e., the difference in predicted paternity share between single-male and multi-male groups) at different levels of seasonality for both the maximum and minimum paternity share models. The purpose of this is to determine whether the difference in the main effect coefficient on the competition parameter leads to a substantively different conclusion.
 
 ```{r conditional-competition-effects, results='asis'}
 
@@ -544,9 +593,10 @@ gt_cond_min <- gt(cond_min) %>%
 print_gt(gt_cond_min, pos = "H")
 ```
 
-**Interpretation** In both models, competition has a meaningful effect on primary male paternity share: males in single-male groups are predicted to obtain a substantially higher share of paternities than males in multi-male groups at all levels of seasonality. However, the minimum estimate model produces larger point estimates for this effect (~23-30% difference versus ~18-19% difference in the maximum estimate model). This is not surprising. Reassigning uncertain paternities away from primary males disproportionately reduces the predicted primary male paternity share in multi-male groups, where most of the ambiguity in paternity assignment occurs. However, there is considerable overlap in the 95% credible intervals between the two models at every level of seasonality. Thus, these two different methods of operationalizing primary male paternity share do not ultimately yield distinguishable estimates of the effect of competition. The qualitative conclusion (that competition is an important predictor of primary male paternity share, while seasonality is not) is robust to the decisions we made about how to handle uncertain paternities.
+**Interpretation**  In both models, competition has a meaningful effect on primary male paternity share: males in single-male groups are predicted to obtain a substantially higher share of paternities than males in multi-male groups at all levels of seasonality. However, the minimum estimate model produces larger point estimates for this effect (~23–30% difference versus ~18–19% difference in the maximum estimate model). This is not surprising. Reassigning uncertain paternities away from primary males disproportionately reduces the predicted primary male paternity share in multi-male groups, where most of the ambiguity in paternity assignment occurs. However, there is considerable overlap in the 95% credible intervals between the two models at every level of seasonality. Thus, these two different methods of operationalizing primary male paternity share do not ultimately yield distinguishable estimates of the effect of competition. The qualitative conclusion (that competition is an important predictor of primary male paternity share, while seasonality is not) is robust to decisions about how to handle uncertain paternities.
 
-### C. Source of paternity losses in multi-male groups (Question 3 in main text)
+## C. Source of paternity losses in multi-male groups (Question 3 in main text)
+\label{sec:2c}
 
 In the main text we model the proportion of lost paternities attributable to extra-group males versus non-primary resident males using the minimum extra-group paternity (EGP) count (i.e., only confirmed extra-group paternities). Here we present that model alongside a model using the maximum possible EGP count, in which ambiguous paternities are assigned to extra-group males. Results are qualitatively similar regardless of which choice is made. 
 
@@ -563,7 +613,7 @@ fe_loss_min <- fe_loss_min %>%
   select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
 
 gt_loss_min <- gt(fe_loss_min) %>%
-  tab_header(title = "Table S10. Paternity loss source model: Minimum EGP count (in main text)") %>%
+  tab_header(title = "Table S10. Paternity loss source model: minimum EGP count (in main text)") %>%
   fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
   fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
@@ -623,7 +673,7 @@ fe_loss_max <- fe_loss_max %>%
   select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
 
 gt_loss_max <- gt(fe_loss_max) %>%
-  tab_header(title = "Table S11. Paternity loss source model: Maximum EGP count") %>%
+  tab_header(title = "Table S11. Paternity loss source model: maximum EGP count") %>%
   fmt_number(columns = c(Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat), decimals = 3) %>%
   fmt_number(columns = c(Bulk_ESS, Tail_ESS), decimals = 0) %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
@@ -645,7 +695,7 @@ prop_loss_min <- data.frame(
 )
 
 gt_loss_prop_min <- gt(prop_loss_min) %>%
-  tab_header(title = "Table S12. Predicted paternity loss source: Minimum EGP count (in main text)") %>%
+  tab_header(title = "Table S12. Model-derived predicted paternity loss source: minimum EGP count (in main text)") %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
 print_gt(gt_loss_prop_min, pos = "H", narrow = TRUE)
 ```
@@ -665,7 +715,16 @@ prop_loss_max <- data.frame(
 )
 
 gt_loss_prop_max <- gt(prop_loss_max) %>%
-  tab_header(title = "Table S13. Predicted paternity loss source: Maximum EGP count") %>%
+  tab_header(title = "Table S13. Model-derived predicted paternity loss source: maximum EGP count") %>%
   tab_options(heading.title.font.size = px(14), table.font.size = "small")
 print_gt(gt_loss_prop_max, pos = "H", narrow = TRUE)
 ```
+
+\newpage
+
+# 3. Paternity data bibliography
+\label{sec:bibliography}
+
+The following references are the sources from which genetic paternity data were compiled for this study.
+
+<div id="refs"></div>
