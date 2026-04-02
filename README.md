@@ -2,7 +2,7 @@
 
 **Authors:** Stacy Rosenbaum, Nicholas Grebe, Joan B. Silk
 
-**Status:** In preparation
+**Status:** Preprint (submitted to bioRxiv)
 
 ## Overview
 

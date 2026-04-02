@@ -890,7 +890,7 @@ $$
 
 where $n_{\text{in}}$ is the number of within-social group competitors a male faces, $n_{\text{out}}$ is the number of extra-group competitors he faces, and $\alpha$ and $\beta$ are weighting parameters that indicate the relative strength of intra- and extra-group competitors (e.g., in mountain gorillas, extra-group competitors may be harder to drive off, perhaps because they are more motivated to fight for mating opportunities [@Robbins_Sawyer_2007]).
 
-The value of this theoretical framework is that it makes it clear precisely what data would be needed for a rigorous test. Specifically, we would need: (1) conception-level data on social conditions at the time each offspring was sired, rather than paternity proportions aggregated over long time periods; (2) a continuous measure of the number of competitors, including some way to separately quantify within-group ($n_{\text{in}}$) and extra-group ($n_{\text{out}}$) competition; and (3) a direct measure of monopolizability at the time of conception, rather than a species-level proxy. 
+The value of this theoretical framework is that it makes clear precisely what data would be needed for a rigorous test. Specifically, we would need: (1) conception-level data on social conditions at the time each offspring was sired, rather than paternity proportions aggregated over long time periods; (2) a continuous measure of the number of competitors, including some way to separately quantify within-group ($n_{\text{in}}$) and extra-group ($n_{\text{out}}$) competition; and (3) a direct measure of monopolizability at the time of conception, rather than a species-level proxy. 
 
 Few papers in our dataset report this information. Due to primates’ slow life histories and the realities of sample collection and analysis, paternity determination usually does not happen until months or even years after offspring are born. The social conditions of the father at the time of conception of a given offspring are frequently omitted from studies, sometimes because they are not available, and sometimes because they are not seen as relevant. Small sample sizes mean that data are often aggregated over many years. However, unless group composition and number of mating opportunities are extremely stable, statistics like the proportion of infants sired by primary male(s) across long time periods hide the potentially considerable amount of variation in social conditions that may have occurred at the point of the conception, which is the biologically relevant time window.
 
@@ -949,7 +949,7 @@ Across scientific disciplines, researchers have recognized the value of building
 
 4) We will provide the most current version of the dataset on an open-access Github repository (https://github.com/slrosen/primate-paternity-metanalysis). All updates to the underlying dataset will be documented in a README file. 
 
-5) The most current version of our results plus all previous versions will be posted in the same Github repository.
+5) The most current version of our results, plus all previous versions, will be posted on the same Github repository.
 
 ## Results
 
@@ -2440,8 +2440,12 @@ Our analyses show that both phylogeny and group composition influence the patern
 
 We would like to thank Adrian Jäggi, Eduardo Fernandez-Duque, and Jason Kamilar for their advice and thoughts on these analyses, as well as Stephanie Fox and Pascale Sicotte, Carola Borries, Sylvain Gatti and colleagues, Liza Moscovice and Robert Seyfarth, Veronika Städele, and Linda Vigilant for contributing unpublished paternity data. Maud Mouginot, Amy Scott, Joseph Feldblum, Songtao Guo, Eva Wikberg, Peter Kappeler, Caroline Nievergelt, and Carola Borries all helped us untangle and extract data from published papers, for which we are extremely grateful.
 
+# Data and code availability
+
+All data, code, and supplementary materials are available at https://github.com/slrosen/primate-paternity-metanalysis.
+
 # GenAI use statement
 
-We used Claude Code to help streamline our data cleaning and compilation workflow, clean and edit code, debug output formatting issues, alphabetize and consolidate/organize .bib files and the associated study pdfs, copy edit the text, and create and update the README file that is available on Github. Our CLAUDE.md file can be found in the project Github repository along with all other materials needed to replicate these analyses (https://github.com/slrosen/primate-paternity-metanalysis).
+We used Claude Code to help streamline our data cleaning and compilation workflow, clean and edit code, debug output formatting issues, alphabetize and consolidate/organize .bib files and the associated study pdfs, copy edit the text, and create and update the README file that is available on Github. Our CLAUDE.md file can be found on Github along with all other materials needed to replicate these analyses.
 
 # References
