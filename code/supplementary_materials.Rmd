@@ -209,6 +209,8 @@ loss_source_model_mm <- readRDS("../output/model-objects/loss_source_model_mm.rd
 
 \vspace{2em}
 
+**The main text for these supplementary materials can be accessed at <https://github.com/slrosen/primate-paternity-metanalysis>.**
+
 \newpage
 
 # 1. Bayesian model diagnostics {#sec:diagnostics}
