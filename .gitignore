@@ -17,3 +17,12 @@ output/model-objects/*.rds
 
 # LaTeX log files
 *.log
+
+# Rendered Word and HTML output (regenerable from the Rmd)
+code/*.docx
+code/*.html
+output/*.docx
+output/*.html
+
+# Word/Office temporary lock files
+~$*
